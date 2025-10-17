@@ -23,8 +23,8 @@
 # Allows us to run the script manually
 # require File.expand_path('../../../../core/lib/recordandplayback', __FILE__)
 
-# For PRODUCTION
-require File.expand_path('../../../lib/recordandplayback', __FILE__)
+# For PRODUCTION - Use system library
+require '/usr/local/bigbluebutton/core/lib/recordandplayback'
 
 require 'rubygems'
 require 'optimist'
@@ -37,9 +37,11 @@ end
 
 meeting_id = opts[:meeting_id]
 
-# This script lives in scripts/archive/steps while properties.yaml lives in scripts/
-props = YAML::load(File.open('../../core/scripts/bigbluebutton.yml'))
-notes_props = YAML::load(File.open('notes.yml'))
+# Load configuration from local config directory for development
+script_dir = File.expand_path(File.dirname(__FILE__))
+project_root = File.expand_path('../..', script_dir)
+props = YAML::load(File.open("#{project_root}/config/bigbluebutton.yml"))
+notes_props = YAML::load(File.open("#{project_root}/config/notes.yml"))
 format = notes_props['format']
 
 recording_dir = props['recording_dir']
