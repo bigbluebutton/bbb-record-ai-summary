@@ -22,6 +22,7 @@ bbb-playback-ai/
 │   └── status/             # Status files (.done/.fail)
 ├── logs/                   # Processing logs
 ├── apply.sh                # Main test harness script
+├── clean.sh                # Cleanup generated files
 ├── compare.sh              # Compare local vs server output
 └── ARCHITECTURE.md         # System architecture documentation
 ```
@@ -64,7 +65,29 @@ The script will:
 4. Create `.done` status files
 5. Show summary of results
 
-### 2. Comparing Results
+### 2. Cleaning Up Generated Files
+
+Remove all generated files to start fresh (preserves raw data):
+
+```bash
+./clean.sh <meeting_id>
+```
+
+**Dry-run mode** (preview what would be deleted):
+```bash
+./clean.sh --dry-run <meeting_id>
+```
+
+This removes:
+- Processed files (`recording/process/notes/<meeting_id>/`)
+- Published files (`recording/publish/notes/<meeting_id>/`)
+- Log files (`logs/notes/*<meeting_id>.log`)
+- Status files (`.done` and `.fail` files)
+
+**Preserves:**
+- Raw recording data (`recording/raw/<meeting_id>/`)
+
+### 3. Comparing Results
 
 Compare the local output with BigBlueButton server output:
 
@@ -137,26 +160,41 @@ vim notes/process/notes.rb
 vim notes/publish/notes.rb
 ```
 
-### 3. Test Changes
+### 3. Clean Previous Test Run
+
+```bash
+./clean.sh <meeting_id>
+```
+
+### 4. Test Changes
 
 ```bash
 ./apply.sh <meeting_id>
 ```
 
-### 4. Review Logs
+### 5. Review Logs
 
 ```bash
 tail -f logs/notes/process-<meeting_id>.log
 tail -f logs/notes/publish-<meeting_id>.log
 ```
 
-### 5. Compare with Server
+### 6. Compare with Server
 
 ```bash
 ./compare.sh <meeting_id>
 ```
 
-### 6. Deploy to Server
+### 7. Iterate
+
+If you need to make changes, clean and test again:
+```bash
+./clean.sh <meeting_id>
+# Make your code changes
+./apply.sh <meeting_id>
+```
+
+### 8. Deploy to Server
 
 Once testing is complete, copy modified scripts to the system:
 
