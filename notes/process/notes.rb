@@ -86,6 +86,22 @@ if not FileTest.directory?(target_dir)
 
     FileUtils.cp(note_file, "#{target_dir}/notes.#{format}")
 
+    # Calculate word count from notes.html
+    notes_html_file = "#{raw_archive_dir}/notes/notes.html"
+    word_count = 0
+    if File.exist?(notes_html_file)
+      html_content = File.read(notes_html_file)
+      # Strip HTML tags and count words
+      text_content = html_content.gsub(/<[^>]*>/, ' ')  # Remove HTML tags
+      text_content = text_content.gsub(/&#\d+;/, ' ')   # Remove HTML entities like &#8203;
+      text_content = text_content.gsub(/&[a-z]+;/i, ' ') # Remove named entities like &nbsp;
+      words = text_content.strip.split(/\s+/)
+      word_count = words.length
+      BigBlueButton.logger.info("Calculated word count: #{word_count} words")
+    else
+      BigBlueButton.logger.warn("notes.html not found, word count will be 0")
+    end
+
     # Get the real-time start and end timestamp
     @doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
 
@@ -137,13 +153,15 @@ if not FileTest.directory?(target_dir)
       xml.meta {
         BigBlueButton::Events.get_meeting_metadata("#{raw_archive_dir}/events.xml").each { |k,v| xml.method_missing(k,v) }
       }
+      # Add word count to recording metadata
+      xml.wordcount(word_count)
     end
     ## Write the new metadata.xml
     metadata_file = File.new("#{target_dir}/metadata.xml","w")
     metadata = Nokogiri::XML(metadata.to_xml) { |x| x.noblanks }
     metadata_file.write(metadata.root)
     metadata_file.close
-    BigBlueButton.logger.info("Created an updated metadata.xml with start_time and end_time")
+    BigBlueButton.logger.info("Created an updated metadata.xml with start_time, end_time, and word count (#{word_count})")
 
     process_done = File.new("#{recording_dir}/status/processed/#{meeting_id}-notes.done", "w")
     process_done.write("Processed #{meeting_id}")
