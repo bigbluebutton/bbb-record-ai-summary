@@ -26,6 +26,7 @@ require 'rubygems'
 require 'optimist'
 require 'yaml'
 require 'json'
+require 'erb'
 
 # Helper method to convert HTML to plain text
 def html_to_plain_text(html_content)
@@ -43,17 +44,33 @@ def html_to_plain_text(html_content)
   text.strip
 end
 
-# Helper method to build markdown content
-def build_markdown_content(text_content, word_count)
-  [
-    "# Shared Notes",
-    "",
-    text_content.empty? ? "(No notes content)" : text_content,
-    "",
-    "---",
-    "",
-    "*Word Count: #{word_count} words*"
-  ].join("\n") + "\n"
+# Helper method to extract attendees from events.xml
+def extract_attendees(events_doc, logger)
+  attendees = []
+
+  # Get unique participant names from ParticipantJoinEvent
+  events_doc.xpath("//event[@eventname='ParticipantJoinEvent']/name").each do |name_node|
+    name = name_node.text.strip
+    attendees << name unless attendees.include?(name) || name.empty?
+  end
+
+  logger.info("Extracted #{attendees.length} attendees")
+  attendees.sort
+end
+
+# Helper method to render markdown using ERB template
+def render_markdown_template(template_path, data)
+  template_content = File.read(template_path)
+  erb = ERB.new(template_content, trim_mode: '-')
+
+  # Create a binding with instance variables for ERB
+  template_binding = binding
+  data.each { |key, value| template_binding.local_variable_set(key, value) }
+
+  # Set instance variables for ERB template access
+  data.each { |key, value| instance_variable_set("@#{key}", value) }
+
+  erb.result(binding)
 end
 
 # Helper method to process notes content
@@ -162,14 +179,27 @@ unless FileTest.directory?(target_dir)
     notes_html_file = "#{raw_archive_dir}/notes/notes.html"
     text_content, word_count = process_notes_content(notes_html_file, BigBlueButton.logger)
 
-    # Create notes.md
-    BigBlueButton.logger.info("Creating notes.md")
-    notes_md_content = build_markdown_content(text_content, word_count)
-    File.write("#{target_dir}/notes.md", notes_md_content)
-    BigBlueButton.logger.info("Created notes.md with #{word_count} words")
-
-    # Load events.xml and build complete metadata
+    # Load events.xml for metadata and attendee extraction
     events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
+
+    # Extract attendees from events
+    attendees = extract_attendees(events_doc, BigBlueButton.logger)
+
+    # Collect all data for template
+    template_data = {
+      notes_content: text_content,
+      word_count: word_count,
+      attendees: attendees,
+      transcript: nil,  # Placeholder for future whisper integration
+      summary: nil      # Placeholder for future LLM summary
+    }
+
+    # Render markdown from ERB template
+    BigBlueButton.logger.info("Rendering notes.md from template")
+    template_path = "#{project_root}/notes/templates/notes.md.erb"
+    notes_md_content = render_markdown_template(template_path, template_data)
+    File.write("#{target_dir}/notes.md", notes_md_content)
+    BigBlueButton.logger.info("Created notes.md with #{word_count} words and #{attendees.length} attendees")
     metadata = build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
 
     # Write metadata.xml
