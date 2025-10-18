@@ -89,18 +89,42 @@ if not FileTest.directory?(target_dir)
     # Calculate word count from notes.html
     notes_html_file = "#{raw_archive_dir}/notes/notes.html"
     word_count = 0
+    text_content = ""
     if File.exist?(notes_html_file)
       html_content = File.read(notes_html_file)
-      # Strip HTML tags and count words
-      text_content = html_content.gsub(/<[^>]*>/, ' ')  # Remove HTML tags
-      text_content = text_content.gsub(/&#\d+;/, ' ')   # Remove HTML entities like &#8203;
+      # Remove style and script tags with their content
+      html_content = html_content.gsub(/<style[^>]*>.*?<\/style>/im, '')
+      html_content = html_content.gsub(/<script[^>]*>.*?<\/script>/im, '')
+      html_content = html_content.gsub(/<head[^>]*>.*?<\/head>/im, '')
+      # Strip HTML tags to get plain text
+      text_content = html_content.gsub(/<[^>]*>/, "\n")
+      text_content = text_content.gsub(/&#\d+;/, '')   # Remove HTML entities like &#8203;
       text_content = text_content.gsub(/&[a-z]+;/i, ' ') # Remove named entities like &nbsp;
-      words = text_content.strip.split(/\s+/)
+      # Remove lines that look like Etherpad IDs (g.xxxxx$notes)
+      text_content = text_content.gsub(/^g\.\w+\$\w+\s*$/m, '')
+      text_content = text_content.strip
+      # Count words
+      words = text_content.split(/\s+/)
       word_count = words.length
       BigBlueButton.logger.info("Calculated word count: #{word_count} words")
     else
       BigBlueButton.logger.warn("notes.html not found, word count will be 0")
     end
+
+    # Create notes.md from notes content
+    BigBlueButton.logger.info("Creating notes.md")
+    notes_md_content = "# Shared Notes\n\n"
+    if text_content.empty?
+      notes_md_content += "(No notes content)\n"
+    else
+      notes_md_content += "#{text_content}\n"
+    end
+    notes_md_content += "\n---\n\n"
+    notes_md_content += "*Word Count: #{word_count} words*\n"
+
+    # Save markdown file
+    File.write("#{target_dir}/notes.md", notes_md_content)
+    BigBlueButton.logger.info("Created notes.md with #{word_count} words")
 
     # Get the real-time start and end timestamp
     @doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))

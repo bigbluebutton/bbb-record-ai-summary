@@ -1,2 +1,25 @@
+# Generated directories
 logs/
 recording/
+whisper.cpp/
+
+# Test files
+test_transcript.txt
+*.tmp
+
+# Editor files
+*.swp
+*.swo
+*.swn
+*~
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+*.bak
+
+# Ruby
+*.gem
+.bundle/

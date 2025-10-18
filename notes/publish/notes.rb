@@ -28,8 +28,6 @@ require 'optimist'
 require 'yaml'
 require 'builder'
 require 'fastimage' # require fastimage to get the image size of the slides (gem install fastimage)
-require 'prawn'
-require 'pdf-reader'
 
 # Load configuration from local config directory for development
 script_dir = File.expand_path(File.dirname(__FILE__))
@@ -76,56 +74,33 @@ begin
       if File.exist? note_file
         BigBlueButton.logger.info("Original notes file: #{note_file}")
 
-        # Read word count from process metadata
-        process_metadata = Nokogiri::XML(File.open("#{process_dir}/metadata.xml"))
-        word_count = process_metadata.at_xpath("//recording/wordcount")&.text || "0"
-        BigBlueButton.logger.info("Word count from metadata: #{word_count}")
-
-        # Create new PDF with original content + word count
+        # Convert notes.md to PDF using pandoc
+        source_md = "#{process_dir}/notes.md"
         output_pdf = "#{target_dir}/notes.pdf"
-        begin
-          # Read notes HTML for text content
-          notes_html_file = "#{raw_archive_dir}/notes/notes.html"
-          text_content = ""
 
-          if File.exist?(notes_html_file)
-            html_content = File.read(notes_html_file)
-            # Remove style and script tags with their content
-            html_content = html_content.gsub(/<style[^>]*>.*?<\/style>/im, '')
-            html_content = html_content.gsub(/<script[^>]*>.*?<\/script>/im, '')
-            html_content = html_content.gsub(/<head[^>]*>.*?<\/head>/im, '')
-            # Strip remaining HTML tags to get plain text
-            text_content = html_content.gsub(/<[^>]*>/, "\n")
-            text_content = text_content.gsub(/&#\d+;/, '')
-            text_content = text_content.gsub(/&[a-z]+;/i, ' ')
-            # Remove lines that look like Etherpad IDs (g.xxxxx$notes)
-            text_content = text_content.gsub(/^g\.\w+\$\w+\s*$/m, '')
-            text_content = text_content.strip
+        if File.exist?(source_md)
+          BigBlueButton.logger.info("Converting notes.md to PDF with pandoc")
+          BigBlueButton.logger.info("Source: #{source_md}")
+          BigBlueButton.logger.info("Output: #{output_pdf}")
+
+          # Convert markdown to PDF using pandoc
+          pandoc_cmd = "pandoc '#{source_md}' -o '#{output_pdf}' --pdf-engine=pdflatex 2>&1"
+          result = `#{pandoc_cmd}`
+
+          if $?.success? && File.exist?(output_pdf)
+            BigBlueButton.logger.info("Successfully generated PDF from markdown using pandoc")
+            BigBlueButton.logger.info("PDF size: #{File.size(output_pdf)} bytes")
+
+            # Also copy the markdown file to publish directory
+            FileUtils.cp(source_md, "#{target_dir}/notes.md")
+            BigBlueButton.logger.info("Copied notes.md to publish directory")
+          else
+            BigBlueButton.logger.error("Pandoc conversion failed: #{result}")
+            BigBlueButton.logger.warn("Falling back to original PDF")
+            FileUtils.cp(note_file, target_dir)
           end
-
-          # Generate new PDF with Prawn
-          Prawn::Document.generate(output_pdf) do |pdf|
-            # Add notes content
-            pdf.text "Shared Notes", size: 20, style: :bold
-            pdf.move_down 20
-
-            if text_content.empty?
-              pdf.text "(No notes content)"
-            else
-              pdf.text text_content, size: 12
-            end
-
-            # Add word count at the bottom
-            pdf.move_down 30
-            pdf.stroke_horizontal_rule
-            pdf.move_down 10
-            pdf.text "Word Count: #{word_count} words", size: 10, style: :italic, align: :right
-          end
-
-          BigBlueButton.logger.info("Generated new PDF with word count: #{output_pdf}")
-        rescue Exception => pdf_error
-          BigBlueButton.logger.warn("Failed to generate PDF with word count: #{pdf_error.message}")
-          BigBlueButton.logger.warn("Falling back to copying original PDF")
+        else
+          BigBlueButton.logger.warn("notes.md not found at #{source_md}, using original PDF")
           FileUtils.cp(note_file, target_dir)
         end
 
