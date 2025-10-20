@@ -28,6 +28,9 @@ require 'yaml'
 require 'json'
 require 'erb'
 
+# Load all extractors
+require_relative '../lib/extractors'
+
 # Helper method to convert HTML to plain text
 def html_to_plain_text(html_content)
   return "" if html_content.nil? || html_content.empty?
@@ -44,19 +47,7 @@ def html_to_plain_text(html_content)
   text.strip
 end
 
-# Helper method to extract attendees from events.xml
-def extract_attendees(events_doc, logger)
-  attendees = []
-
-  # Get unique participant names from ParticipantJoinEvent
-  events_doc.xpath("//event[@eventname='ParticipantJoinEvent']/name").each do |name_node|
-    name = name_node.text.strip
-    attendees << name unless attendees.include?(name) || name.empty?
-  end
-
-  logger.info("Extracted #{attendees.length} attendees")
-  attendees.sort
-end
+# Attendee extraction moved to notes/lib/extractors/attendees_extractor.rb
 
 # Helper method to render markdown using ERB template
 def render_markdown_template(template_path, data)
@@ -73,25 +64,7 @@ def render_markdown_template(template_path, data)
   erb.result(binding)
 end
 
-# Helper method to process notes content
-def process_notes_content(notes_html_file, logger)
-  word_count = 0
-  text_content = ""
-
-  if File.exist?(notes_html_file)
-    html_content = File.read(notes_html_file)
-    text_content = html_to_plain_text(html_content)
-
-    # Count words
-    words = text_content.split(/\s+/)
-    word_count = words.length
-    logger.info("Calculated word count: #{word_count} words")
-  else
-    logger.warn("notes.html not found, word count will be 0")
-  end
-
-  [text_content, word_count]
-end
+# Notes content extraction moved to notes/lib/extractors/notes_extractor.rb
 
 # Helper method to build complete metadata XML
 def build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
@@ -175,23 +148,34 @@ unless FileTest.directory?(target_dir)
     # Copy notes file
     FileUtils.cp(note_file, "#{target_dir}/notes.#{format}")
 
-    # Process notes content
-    notes_html_file = "#{raw_archive_dir}/notes/notes.html"
-    text_content, word_count = process_notes_content(notes_html_file, BigBlueButton.logger)
-
-    # Load events.xml for metadata and attendee extraction
+    # Load events.xml for metadata and extraction
     events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
 
-    # Extract attendees from events
-    attendees = extract_attendees(events_doc, BigBlueButton.logger)
+    # Initialize notes extractor and extract content
+    notes_extractor = NotesExtractors::NotesExtractor.new
+    notes_content = notes_extractor.extract(raw_archive_dir, method(:html_to_plain_text), BigBlueButton.logger)
+    word_count = notes_extractor.word_count
+
+    # Extract all other data using extractors
+    attendees = NotesExtractors::AttendeesExtractor.extract(events_doc, BigBlueButton.logger)
+    transcript = NotesExtractors::TranscriptExtractor.extract(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc)
+    polls = NotesExtractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
+
+    # Handle transcript format (can be string or hash with plain/diarized)
+    transcript_plain = transcript.is_a?(Hash) ? transcript[:plain] : transcript
+    transcript_diarized = transcript.is_a?(Hash) ? transcript[:diarized] : nil
+
+    summary = NotesExtractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger)
 
     # Collect all data for template
     template_data = {
-      notes_content: text_content,
+      notes_content: notes_content,
       word_count: word_count,
       attendees: attendees,
-      transcript: nil,  # Placeholder for future whisper integration
-      summary: nil      # Placeholder for future LLM summary
+      transcript: transcript_plain,
+      transcript_diarized: transcript_diarized,
+      polls: polls,
+      summary: summary
     }
 
     # Render markdown from ERB template

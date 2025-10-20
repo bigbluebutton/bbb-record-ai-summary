@@ -24,7 +24,7 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 
 # Step 1: Install dependencies
-echo -e "${YELLOW}[1/5]${NC} Installing build dependencies..."
+echo -e "${YELLOW}[1/6]${NC} Installing build dependencies..."
 PACKAGES="build-essential git wget cmake pandoc texlive-latex-base texlive-latex-recommended"
 MISSING_PACKAGES=""
 
@@ -44,8 +44,16 @@ else
 fi
 echo ""
 
-# Step 2: Clone whisper.cpp
-echo -e "${YELLOW}[2/5]${NC} Cloning whisper.cpp repository..."
+# Step 2: Install Ruby gems for LLM integration
+echo -e "${YELLOW}[2/6]${NC} Installing Ruby gems for LLM integration..."
+GEMS="ruby-openai anthropic-sdk-ruby"
+echo "  Installing gems: $GEMS"
+sudo gem install $GEMS --no-document 2>&1 | grep -E "(Successfully installed|already installed)" || true
+echo -e "  ${GREEN}✓ Ruby gems installed${NC}"
+echo ""
+
+# Step 3: Clone whisper.cpp
+echo -e "${YELLOW}[3/6]${NC} Cloning whisper.cpp repository..."
 if [ -d "$WHISPER_DIR" ]; then
     echo -e "  ${YELLOW}Directory already exists, pulling latest changes...${NC}"
     cd "$WHISPER_DIR"
@@ -57,8 +65,8 @@ else
 fi
 echo ""
 
-# Step 3: Compile whisper.cpp
-echo -e "${YELLOW}[3/5]${NC} Compiling whisper.cpp..."
+# Step 4: Compile whisper.cpp
+echo -e "${YELLOW}[4/6]${NC} Compiling whisper.cpp..."
 cd "$WHISPER_DIR"
 
 # Compile with cmake
@@ -81,8 +89,8 @@ fi
 cd "$SCRIPT_DIR"
 echo ""
 
-# Step 4: Download model
-echo -e "${YELLOW}[4/5]${NC} Downloading Whisper model (${MODEL_NAME})..."
+# Step 5: Download model
+echo -e "${YELLOW}[5/6]${NC} Downloading Whisper model (${MODEL_NAME})..."
 MODEL_FILE="$WHISPER_DIR/models/ggml-${MODEL_NAME}.bin"
 
 if [ -f "$MODEL_FILE" ]; then
@@ -104,8 +112,8 @@ else
 fi
 echo ""
 
-# Step 5: Create helper script
-echo -e "${YELLOW}[5/5]${NC} Creating helper transcription script..."
+# Step 6: Create helper script
+echo -e "${YELLOW}[6/6]${NC} Creating helper transcription script..."
 TRANSCRIBE_SCRIPT="$SCRIPT_DIR/transcribe.sh"
 
 cat > "$TRANSCRIBE_SCRIPT" << 'EOF'

@@ -23,3 +23,6 @@ Thumbs.db
 # Ruby
 *.gem
 .bundle/
+
+# Configuration (API keys)
+config/llm.yml

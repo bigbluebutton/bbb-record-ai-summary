@@ -1,0 +1,58 @@
+# Shared Notes
+
+<% if @notes_content && !@notes_content.empty? %>
+<%= @notes_content %>
+<% else %>
+(No notes content)
+<% end %>
+
+---
+
+<% if @attendees && !@attendees.empty? %>
+## Attendees (<%= @attendees.length %>)
+
+<%= @attendees.map { |name| "- #{name}" }.join("\n") %>
+
+---
+
+<% end %>
+<% if @polls && !@polls.empty? %>
+## Poll Results (<%= @polls.length %>)
+
+<% @polls.each_with_index do |poll, idx| %>
+### Poll <%= idx + 1 %>: <%= poll[:question] %>
+
+<% poll[:answers].each do |answer| %>
+- **<%= answer[:text] %>**: <%= answer[:votes] %> <%= answer[:votes] == 1 ? 'vote' : 'votes' %>
+<% end %>
+
+<% end %>
+---
+
+<% end %>
+<% if @transcript_diarized && !@transcript_diarized.empty? %>
+## Audio Transcription (Speaker-Labeled)
+
+<%= @transcript_diarized %>
+
+---
+
+<% elsif @transcript && !@transcript.empty? %>
+## Audio Transcription
+
+<%= @transcript %>
+
+---
+
+<% end %>
+<% if @summary && !@summary.empty? %>
+## Meeting Summary
+
+<%= @summary %>
+
+---
+
+<% end %>
+<% if @word_count %>
+*Word Count: <%= @word_count %> words*
+<% end %>

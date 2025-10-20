@@ -19,19 +19,32 @@ MODEL="$WHISPER_DIR/models/ggml-base.en.bin"
 
 # Check if audio file is provided
 if [ -z "$1" ]; then
-    echo "Usage: $0 <audio_file> [output_file]"
+    echo "Usage: $0 <audio_file> [output_file] [--json]"
     echo ""
     echo "Examples:"
     echo "  $0 recording.opus"
     echo "  $0 recording.opus transcript.txt"
+    echo "  $0 recording.opus transcript.json --json"
     echo ""
     echo "Supported formats: wav, mp3, opus, ogg, m4a, flac"
     echo "Note: Non-WAV files will be converted to WAV automatically using ffmpeg"
+    echo "Options:"
+    echo "  --json    Output JSON format with timestamps for diarization"
     exit 1
 fi
 
 AUDIO_FILE="$1"
 OUTPUT_FILE="${2:-}"
+JSON_MODE=false
+
+# Check for --json flag in arguments
+if [ "$3" = "--json" ] || [ "$2" = "--json" ]; then
+    JSON_MODE=true
+    # If --json is second arg, clear output file
+    if [ "$2" = "--json" ]; then
+        OUTPUT_FILE=""
+    fi
+fi
 
 # Check if audio file exists
 if [ ! -f "$AUDIO_FILE" ]; then
@@ -82,24 +95,48 @@ echo ""
 
 if [ -n "$OUTPUT_FILE" ]; then
     # Output to specified file
-    "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt -of "${OUTPUT_FILE%.txt}" --no-timestamps 2>/dev/null
+    if [ "$JSON_MODE" = true ]; then
+        # JSON mode with timestamps for diarization
+        OUTPUT_BASE="${OUTPUT_FILE%.json}"
+        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj -of "$OUTPUT_BASE" 2>/dev/null
 
-    # whisper.cpp adds .txt extension automatically
-    if [ ! -f "${OUTPUT_FILE%.txt}.txt" ]; then
-        echo "Error: Transcription failed"
-        [ -n "$TEMP_WAV" ] && rm -f "$TEMP_WAV"
-        exit 1
-    fi
+        # whisper.cpp adds .json extension automatically
+        if [ ! -f "${OUTPUT_BASE}.json" ]; then
+            echo "Error: Transcription failed"
+            [ -n "$TEMP_WAV" ] && rm -f "$TEMP_WAV"
+            exit 1
+        fi
 
-    # Move to desired output name if different
-    if [ "${OUTPUT_FILE%.txt}.txt" != "$OUTPUT_FILE" ]; then
-        mv "${OUTPUT_FILE%.txt}.txt" "$OUTPUT_FILE"
+        # Move to desired output name if different
+        if [ "${OUTPUT_BASE}.json" != "$OUTPUT_FILE" ]; then
+            mv "${OUTPUT_BASE}.json" "$OUTPUT_FILE"
+        fi
+    else
+        # Plain text mode without timestamps
+        OUTPUT_BASE="${OUTPUT_FILE%.txt}"
+        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt -of "$OUTPUT_BASE" --no-timestamps 2>/dev/null
+
+        # whisper.cpp adds .txt extension automatically
+        if [ ! -f "${OUTPUT_BASE}.txt" ]; then
+            echo "Error: Transcription failed"
+            [ -n "$TEMP_WAV" ] && rm -f "$TEMP_WAV"
+            exit 1
+        fi
+
+        # Move to desired output name if different
+        if [ "${OUTPUT_BASE}.txt" != "$OUTPUT_FILE" ]; then
+            mv "${OUTPUT_BASE}.txt" "$OUTPUT_FILE"
+        fi
     fi
 
     echo "✓ Transcription complete: $OUTPUT_FILE"
 else
     # Output to stdout
-    "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt --no-timestamps 2>/dev/null
+    if [ "$JSON_MODE" = true ]; then
+        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj 2>/dev/null
+    else
+        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt --no-timestamps 2>/dev/null
+    fi
 fi
 
 # Cleanup temp file
