@@ -307,8 +307,14 @@ module NotesExtractors
           json_data = JSON.parse(File.read(json_file))
           transcription = json_data['transcription'] || []
 
+          words_before = all_words.size
+
           transcription.each do |segment|
             next unless segment['tokens']
+
+            # Skip entire segment if it's just noise description
+            segment_text = segment['text'].to_s
+            next if is_noise_segment?(segment_text)
 
             segment['tokens'].each do |token|
               # Skip special tokens and their fragments
@@ -335,7 +341,8 @@ module NotesExtractors
             end
           end
 
-          logger.info("Extracted #{all_words.size - (all_words.size - segment['tokens']&.size || 0)} words from #{basename}")
+          words_extracted = all_words.size - words_before
+          logger.info("Extracted #{words_extracted} words from #{basename}")
         rescue JSON::ParserError => e
           logger.error("Failed to parse JSON for #{basename}: #{e.message}")
         rescue => e
@@ -387,8 +394,24 @@ module NotesExtractors
       # Catch fragments like: [, ], BLANK, _, AUDIO, AUD, IO, BEG, END, TT, ANK, BL, sil, ence, etc.
       return true if trimmed.match?(/^[\[\]()]$/)  # Just brackets/parens
       return true if trimmed.match?(/^(BLANK|AUDIO|AUD|ANK|BL|IO|BEG|END|TT|_|sil|ence)$/i)  # Marker keywords/fragments
-      return true if trimmed.match?(/^\(?(key)?board|clicking|noise\)?$/i)  # Noise descriptions
+
+      # Catch noise descriptions in parentheses like "(keyboard clicking)"
+      return true if trimmed.match?(/^\(.*?(keyboard|clicking|typing|noise|coughing|laughing).*?\)$/i)
+
+      # Catch individual noise-related words (full words, not fragments to avoid false positives)
+      lower = trimmed.downcase
+      return true if lower.include?('keyboard') || lower.include?('clicking') || lower.include?('typing')
+      return true if lower.include?('coughing') || lower.include?('laughing')
+
       false
+    end
+
+    # Check if segment text contains only noise descriptions in parentheses
+    def self.is_noise_segment?(segment_text)
+      return false if segment_text.nil? || segment_text.empty?
+      trimmed = segment_text.strip
+      # Check if entire segment is just noise description(s) in parentheses
+      trimmed.match?(/^\s*\([^)]*(?:keyboard|clicking|typing|noise|coughing|laughing|silence)[^)]*\)\s*$/i)
     end
 
     # Merge word entries and format as speaker-attributed transcript in WebVTT format
