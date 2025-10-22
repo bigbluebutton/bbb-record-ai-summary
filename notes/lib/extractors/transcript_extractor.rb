@@ -38,10 +38,10 @@ module NotesExtractors
             # Merge and format transcript with relative timestamps
             diarized = merge_and_format_transcript(words, recording_start, logger)
 
-            # Save diarized transcript
-            diarized_file = "#{target_dir}/transcript_diarized.txt"
+            # Save diarized transcript in WebVTT format
+            diarized_file = "#{target_dir}/transcript_diarized.vtt"
             File.write(diarized_file, diarized)
-            logger.info("Saved diarized transcript: #{diarized_file}")
+            logger.info("Saved diarized transcript (WebVTT): #{diarized_file}")
 
             # Also create a plain text version (just the text without timestamps/speakers)
             plain_text = words.map { |w| w[:text] }.join('')
@@ -311,8 +311,11 @@ module NotesExtractors
             next unless segment['tokens']
 
             segment['tokens'].each do |token|
-              # Skip special tokens (begin/end markers)
-              next if token['text'].start_with?('[_')
+              # Skip special tokens and their fragments
+              text = token['text'].to_s
+              text_trimmed = text.strip
+              next if text_trimmed.start_with?('[_') || text_trimmed == '[_BEG_]' || text_trimmed == '[_END_]' || text_trimmed == '[BLANK_AUDIO]'
+              next if is_special_marker_fragment?(text)
 
               # Parse timestamp from "HH:MM:SS,mmm" format to milliseconds
               from_ms = parse_timestamp(token['timestamps']['from'])
@@ -327,7 +330,7 @@ module NotesExtractors
                 abs_end_timestamp: abs_to,
                 user_id: track_info[:user_id],
                 name: track_info[:name],
-                text: token['text']
+                text: text
               }
             end
           end
@@ -373,53 +376,106 @@ module NotesExtractors
       format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
     end
 
-    # Merge word entries and format as speaker-attributed transcript
+    # Check if text is just punctuation (with optional whitespace)
+    def self.is_punctuation_only?(text)
+      text.strip.match?(/^[.,!?;:]+$/)
+    end
+
+    # Check if token appears to be part of a special marker (BLANK_AUDIO fragments, etc.)
+    def self.is_special_marker_fragment?(text)
+      trimmed = text.strip
+      # Catch fragments like: [, ], BLANK, _, AUDIO, AUD, IO, BEG, END, TT, ANK, BL, sil, ence, etc.
+      return true if trimmed.match?(/^[\[\]()]$/)  # Just brackets/parens
+      return true if trimmed.match?(/^(BLANK|AUDIO|AUD|ANK|BL|IO|BEG|END|TT|_|sil|ence)$/i)  # Marker keywords/fragments
+      return true if trimmed.match?(/^\(?(key)?board|clicking|noise\)?$/i)  # Noise descriptions
+      false
+    end
+
+    # Merge word entries and format as speaker-attributed transcript in WebVTT format
     # recording_start is in milliseconds (UTC timestamp)
     def self.merge_and_format_transcript(words, recording_start, logger)
       return "" if words.empty?
 
-      lines = []
+      # Start with WebVTT header
+      lines = ["WEBVTT", ""]
+
+      # Configuration: Look ahead to see if speaker truly changed or just brief interjection
+      min_words_for_speaker_change = 3  # Need at least 3 consecutive words from new speaker
+
       current_speaker_id = nil
       current_speaker_name = nil
       current_text = []
       segment_start = nil
       segment_end = nil
 
-      words.each do |word|
-        # If speaker changed, output previous segment
-        if current_speaker_id != word[:user_id] && !current_text.empty?
-          # Convert absolute timestamps to relative (from recording start)
-          relative_start = segment_start - recording_start
-          relative_end = segment_end - recording_start
+      i = 0
+      while i < words.length
+        word = words[i]
 
-          timestamp_range = "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
-          lines << "#{timestamp_range}: #{current_speaker_name}"
-          lines << current_text.join('')
-          lines << ""  # Blank line between segments
-
-          current_text = []
+        # Skip special marker fragments
+        if is_special_marker_fragment?(word[:text])
+          i += 1
+          next
         end
 
-        # Start new segment or continue current
-        if current_speaker_id != word[:user_id]
+        # Check if speaker changed
+        if current_speaker_id && current_speaker_id != word[:user_id]
+          # Count how many consecutive words the new speaker has
+          consecutive_count = 0
+          j = i
+          new_speaker_id = word[:user_id]
+
+          while j < words.length && words[j][:user_id] == new_speaker_id
+            consecutive_count += 1 unless is_special_marker_fragment?(words[j][:text])
+            j += 1
+          end
+
+          # If new speaker has enough consecutive words, this is a real speaker change
+          if consecutive_count >= min_words_for_speaker_change
+            # Output current segment
+            unless current_text.empty?
+              relative_start = segment_start - recording_start
+              relative_end = segment_end - recording_start
+
+              timestamp_range = "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
+              lines << timestamp_range
+              lines << "#{current_speaker_name}: #{current_text.join('').strip}"
+              lines << ""
+            end
+
+            # Start new segment
+            current_speaker_id = word[:user_id]
+            current_speaker_name = word[:name]
+            current_text = []
+            segment_start = word[:abs_timestamp]
+          else
+            # Otherwise, it's a brief interjection - skip this word and continue with current speaker
+            i += 1
+            next
+          end
+        end
+
+        # Initialize first segment
+        if current_speaker_id.nil?
           current_speaker_id = word[:user_id]
           current_speaker_name = word[:name]
           segment_start = word[:abs_timestamp]
         end
 
+        # Add word to current segment
         segment_end = word[:abs_end_timestamp]
         current_text << word[:text]
+        i += 1
       end
 
       # Output final segment
       unless current_text.empty?
-        # Convert absolute timestamps to relative (from recording start)
         relative_start = segment_start - recording_start
         relative_end = segment_end - recording_start
 
         timestamp_range = "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
-        lines << "#{timestamp_range}: #{current_speaker_name}"
-        lines << current_text.join('')
+        lines << timestamp_range
+        lines << "#{current_speaker_name}: #{current_text.join('').strip}"
       end
 
       logger.info("Generated #{lines.size} transcript lines")
