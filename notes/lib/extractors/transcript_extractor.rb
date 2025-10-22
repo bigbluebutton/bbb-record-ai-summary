@@ -400,7 +400,7 @@ module NotesExtractors
       lines = ["WEBVTT", ""]
 
       # Configuration: Look ahead to see if speaker truly changed or just brief interjection
-      min_words_for_speaker_change = 3  # Need at least 3 consecutive words from new speaker
+      min_words_for_speaker_change = 2  # Need at least 2 consecutive words from new speaker
 
       current_speaker_id = nil
       current_speaker_name = nil
@@ -421,13 +421,31 @@ module NotesExtractors
         # Check if speaker changed
         if current_speaker_id && current_speaker_id != word[:user_id]
           # Count how many consecutive words the new speaker has
+          # Skip over punctuation-only tokens from other speakers
           consecutive_count = 0
           j = i
           new_speaker_id = word[:user_id]
 
-          while j < words.length && words[j][:user_id] == new_speaker_id
-            consecutive_count += 1 unless is_special_marker_fragment?(words[j][:text])
-            j += 1
+          while j < words.length
+            current_word = words[j]
+
+            # Skip special markers
+            if is_special_marker_fragment?(current_word[:text])
+              j += 1
+              next
+            end
+
+            # If it's the new speaker, count it
+            if current_word[:user_id] == new_speaker_id
+              consecutive_count += 1
+              j += 1
+            # If it's a different speaker but just punctuation, skip it
+            elsif is_punctuation_only?(current_word[:text])
+              j += 1
+            # Otherwise we hit a real word from a different speaker, stop counting
+            else
+              break
+            end
           end
 
           # If new speaker has enough consecutive words, this is a real speaker change
