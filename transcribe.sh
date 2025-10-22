@@ -19,26 +19,36 @@ MODEL="$WHISPER_DIR/models/ggml-base.en.bin"
 
 # Check if audio file is provided
 if [ -z "$1" ]; then
-    echo "Usage: $0 <audio_file> [output_file] [--json]"
+    echo "Usage: $0 <audio_file> [output_file] [--json|--json-full]"
     echo ""
     echo "Examples:"
     echo "  $0 recording.opus"
     echo "  $0 recording.opus transcript.txt"
     echo "  $0 recording.opus transcript.json --json"
+    echo "  $0 recording.opus transcript.json --json-full"
     echo ""
-    echo "Supported formats: wav, mp3, opus, ogg, m4a, flac"
+    echo "Supported formats: wav, mp3, opus, ogg, m4a, flac, webm"
     echo "Note: Non-WAV files will be converted to WAV automatically using ffmpeg"
     echo "Options:"
-    echo "  --json    Output JSON format with timestamps for diarization"
+    echo "  --json       Output JSON format with timestamps"
+    echo "  --json-full  Output JSON format with word-level timestamps"
     exit 1
 fi
 
 AUDIO_FILE="$1"
 OUTPUT_FILE="${2:-}"
 JSON_MODE=false
+JSON_FULL_MODE=false
 
-# Check for --json flag in arguments
-if [ "$3" = "--json" ] || [ "$2" = "--json" ]; then
+# Check for --json or --json-full flag in arguments
+if [ "$3" = "--json-full" ] || [ "$2" = "--json-full" ]; then
+    JSON_MODE=true
+    JSON_FULL_MODE=true
+    # If flag is second arg, clear output file
+    if [ "$2" = "--json-full" ]; then
+        OUTPUT_FILE=""
+    fi
+elif [ "$3" = "--json" ] || [ "$2" = "--json" ]; then
     JSON_MODE=true
     # If --json is second arg, clear output file
     if [ "$2" = "--json" ]; then
@@ -98,7 +108,13 @@ if [ -n "$OUTPUT_FILE" ]; then
     if [ "$JSON_MODE" = true ]; then
         # JSON mode with timestamps for diarization
         OUTPUT_BASE="${OUTPUT_FILE%.json}"
-        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj -of "$OUTPUT_BASE" 2>/dev/null
+
+        # Use full JSON format if requested (includes word-level timestamps)
+        if [ "$JSON_FULL_MODE" = true ]; then
+            "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -ojf -of "$OUTPUT_BASE" 2>/dev/null
+        else
+            "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj -of "$OUTPUT_BASE" 2>/dev/null
+        fi
 
         # whisper.cpp adds .json extension automatically
         if [ ! -f "${OUTPUT_BASE}.json" ]; then
@@ -133,7 +149,11 @@ if [ -n "$OUTPUT_FILE" ]; then
 else
     # Output to stdout
     if [ "$JSON_MODE" = true ]; then
-        "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj 2>/dev/null
+        if [ "$JSON_FULL_MODE" = true ]; then
+            "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -ojf 2>/dev/null
+        else
+            "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -oj 2>/dev/null
+        fi
     else
         "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt --no-timestamps 2>/dev/null
     fi
