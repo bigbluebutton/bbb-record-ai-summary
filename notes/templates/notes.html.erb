@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title><%= @title || "BigBlueButton Session — Summary & Transcript" %></title>
+  <meta name="description" content="<%= @description || "Professional HTML5 summary for a BigBlueButton session with attendees, shared notes, transcript, and action items." %>" />
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #111218;
+      --muted: #8e98a7;
+      --text: #e6e9ef;
+      --accent: #7aa2f7;
+      --ok: #7ee787;
+      --warn: #ffb86b;
+      --border: #1e2230;
+      --shadow: 0 8px 22px rgba(0,0,0,.35);
+      --radius: 16px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#f8fafc; --panel:#ffffff; --muted:#4b5563; --text:#0f172a; --accent:#2563eb; --ok:#16a34a; --warn:#b45309; --border:#e5e7eb; --shadow:0 10px 20px rgba(2,6,23,.06); }
+    }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji"; }
+    .container { max-width: 980px; margin: 0 auto; padding: 28px 18px 64px; }
+    header.hero { background: linear-gradient(160deg, rgba(122,162,247,.18), transparent 60%), var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; box-shadow: var(--shadow); }
+    .kpis { display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; }
+    .kpi { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+    .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing:.06em }
+    .kpi .value { font-weight: 700; font-size: 20px; }
+    nav.toc { margin: 22px 0 10px; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    nav.toc a { text-decoration: none; color: var(--accent); background: var(--panel); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px; }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin-top: 18px; box-shadow: var(--shadow); }
+    section h2 { margin-top: 0; font-size: 20px; }
+    .muted { color: var(--muted); }
+    .attendees { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:10px; list-style:none; padding:0; margin:0; }
+    .attendees li { background: var(--bg); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px; }
+    details.transcript { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    details.transcript[open] summary { border-bottom: 1px solid var(--border); }
+    summary { list-style: none; cursor: pointer; padding: 14px 16px; font-weight: 600; background: var(--panel); }
+    summary::-webkit-details-marker { display:none; }
+    .cue { display: grid; grid-template-columns: 190px 1fr; gap: 12px; padding: 12px 16px; border-bottom: 1px dashed var(--border); }
+    .cue:last-child { border-bottom: 0; }
+    .cue time { font-variant-numeric: tabular-nums; color: var(--muted); }
+    .speaker { font-weight: 600; margin-right: 6px; }
+    .pill { display:inline-block; padding:2px 8px; border:1px solid var(--border); border-radius:999px; font-size:12px; background:var(--bg); }
+    .ok { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, var(--border)); }
+    .warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 40%, var(--border)); }
+    footer { color: var(--muted); text-align: center; margin: 28px 0 0; font-size: 14px; }
+    .actions { display:flex; gap:10px; flex-wrap: wrap; }
+    .btn { display:inline-flex; align-items:center; gap:8px; text-decoration:none; border:1px solid var(--border); background: var(--panel); padding:10px 12px; border-radius:10px; color: var(--text); cursor: pointer; }
+    @media print { body { background:white; } .container { padding:0; } header.hero, section { box-shadow:none; } nav.toc, .actions { display:none; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="hero" role="banner">
+      <h1 style="margin:0 0 6px"><%= @title || "BigBlueButton Session — Summary" %></h1>
+      <p class="muted" style="margin:0"><%= @subtitle || "A clean, printable HTML5 report with shared notes, attendees, transcript, and action items." %></p>
+      <div class="kpis" role="group" aria-label="Quick stats">
+        <div class="kpi"><div class="label">Attendees</div><div class="value"><%= (@attendees&.size || @attendee_count || 0) %></div></div>
+        <div class="kpi"><div class="label">Transcript</div><div class="value"><%= @transcript_format || "Speaker‑labeled" %></div></div>
+        <div class="kpi"><div class="label">Words</div><div class="value"><%= @word_count || 0 %></div></div>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn" id="printBtn" type="button" title="Print or save as PDF">🖨️ Print</button>
+        <button class="btn" id="collapseBtn" type="button" title="Collapse/expand transcript">🗂️ Toggle transcript</button>
+      </div>
+    </header>
+
+    <nav class="toc" aria-label="Contents">
+      <a href="#shared-notes">Shared Notes</a>
+      <a href="#attendees">Attendees</a>
+      <a href="#transcript">Audio Transcript</a>
+      <% if @summary && !@summary.empty? %>
+      <a href="#summary">Meeting Summary</a>
+      <% end %>
+      <% if @action_items && !@action_items.empty? %>
+      <a href="#actions">Action Items</a>
+      <% end %>
+    </nav>
+
+    <section id="shared-notes" aria-labelledby="shared-notes-h">
+      <h2 id="shared-notes-h">Shared Notes</h2>
+      <% if @shared_notes && !@shared_notes.empty? %>
+        <%= @shared_notes %>
+      <% else %>
+        <p class="muted">(No notes content)</p>
+      <% end %>
+    </section>
+
+    <section id="attendees" aria-labelledby="attendees-h">
+      <h2 id="attendees-h">Attendees <span class="pill"><%= (@attendees&.size || @attendee_count || 0) %></span></h2>
+      <% if @attendees && !@attendees.empty? %>
+        <ul class="attendees">
+          <% @attendees.each do |name| %>
+            <li><%= name %></li>
+          <% end %>
+        </ul>
+      <% else %>
+        <p class="muted">(No attendees recorded)</p>
+      <% end %>
+    </section>
+
+    <section id="transcript" aria-labelledby="transcript-h">
+      <h2 id="transcript-h">Audio Transcription <span class="pill"><%= @vtt_label || "WEBVTT" %></span></h2>
+      <% if @transcript && !@transcript.empty? %>
+        <details class="transcript" <%= (@transcript_open.nil? ? true : @transcript_open) ? 'open' : nil %>>
+          <summary><%= @transcript_title || "Speaker‑Labeled Transcript" %></summary>
+          <% @transcript.each do |c| %>
+            <div class="cue">
+              <time><%= c[:start] %> → <%= c[:end] %></time>
+              <div><span class="speaker"><%= c[:speaker] %>:</span> <%= c[:text] %></div>
+            </div>
+          <% end %>
+        </details>
+        <p class="muted" style="margin-top:8px"><%= @timestamps_note || "Timestamps reflect the original WEBVTT track." %></p>
+      <% else %>
+        <p class="muted">(No transcript available)</p>
+      <% end %>
+    </section>
+
+    <% if @summary && !@summary.empty? %>
+      <section id="summary" aria-labelledby="summary-h">
+        <h2 id="summary-h">Meeting Summary</h2>
+        <% if @key_points && !@key_points.empty? %>
+          <h3 style="margin:.2em 0">Key Points</h3>
+          <ol>
+            <% @key_points.each do |pt| %>
+              <li><%= pt %></li>
+            <% end %>
+          </ol>
+        <% else %>
+          <div style="white-space: pre-wrap;"><%= @summary %></div>
+        <% end %>
+      </section>
+    <% end %>
+
+    <% if @action_items && !@action_items.empty? %>
+      <section id="actions" aria-labelledby="actions-h">
+        <h2 id="actions-h">Action Items</h2>
+        <ul>
+          <% @action_items.each do |ai| %>
+            <% klass = ai[:status] == :ok ? 'ok' : (ai[:status] == :warn ? 'warn' : '') %>
+            <li><span class="pill <%= klass %>">Owner: <%= ai[:owner] %></span> <%= ai[:label] %></li>
+          <% end %>
+        </ul>
+      </section>
+    <% end %>
+
+    <footer>
+      <p><%= @footer || "Generated by BigBlueButton Notes processor. Optimized for print and dark/light mode." %></p>
+    </footer>
+  </div>
+
+  <script>
+    document.getElementById('printBtn')?.addEventListener('click', () => window.print());
+    document.getElementById('collapseBtn')?.addEventListener('click', () => {
+      const d = document.querySelector('details.transcript');
+      if (d) d.open = !d.open;
+    });
+    (function() {
+      const shift = 8;
+      const hash = window.location.hash;
+      if (hash) setTimeout(() => window.scrollBy({ top: -shift, behavior: 'instant' }), 0);
+      document.querySelectorAll('a[href^="#"]').forEach(a => {
+        a.addEventListener('click', (e) => {
+          const id = a.getAttribute('href');
+          if (!id) return;
+          const el = document.querySelector(id);
+          if (el) {
+            e.preventDefault();
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            history.pushState(null, '', id);
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
