@@ -30,8 +30,8 @@ steps:
   'process:video': 'publish:video'
 
 # For LOCAL DEVELOPMENT - Override paths to use local directories
-log_dir: /home/ubuntu/bbb-playback-ai/logs
-recording_dir: /home/ubuntu/bbb-playback-ai/recording
-published_dir: /home/ubuntu/bbb-playback-ai/recording/publish
+log_dir: /home/ubuntu/dev/bbb-playback-ai/logs
+recording_dir: /home/ubuntu/dev/bbb-playback-ai/recording
+published_dir: /home/ubuntu/dev/bbb-playback-ai/recording/publish
 playback_host: ovh-test.meetbbb.com
 playback_protocol: https

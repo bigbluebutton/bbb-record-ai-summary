@@ -178,13 +178,31 @@ unless FileTest.directory?(target_dir)
 
     summary = NotesExtractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger)
 
+    # Parse WebVTT transcript into structured cues
+    require_relative '../lib/helpers/webvtt_parser'
+    vtt_file = "#{target_dir}/transcript_diarized.vtt"
+    transcript_cues = File.exist?(vtt_file) ? WebVTTParser.parse(vtt_file) : []
+
+    # Format diarized transcript as markdown for notes.md
+    transcript_diarized_md = if transcript_cues.any?
+      transcript_cues.map do |cue|
+        # Convert "HH:MM:SS.mmm" to "MM:SS"
+        parts = cue[:start].split(':')
+        total_seconds = parts[0].to_i * 3600 + parts[1].to_i * 60 + parts[2].to_f
+        mm = (total_seconds / 60).floor
+        ss = (total_seconds % 60).floor
+        timestamp = format("%02d:%02d", mm, ss)
+        "**#{cue[:speaker]}**: #{cue[:text]}\n*#{timestamp}*"
+      end.join("\n\n")
+    end
+
     # Collect all data for template
     template_data = {
       notes_content: notes_content,
       word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
-      transcript_diarized: transcript_diarized,
+      transcript_diarized: transcript_diarized_md || transcript_diarized,
       polls: polls,
       summary: summary
     }
@@ -198,11 +216,6 @@ unless FileTest.directory?(target_dir)
 
     # Generate HTML report
     BigBlueButton.logger.info("Rendering notes.html from template")
-
-    # Parse WebVTT transcript into structured format
-    require_relative '../lib/helpers/webvtt_parser'
-    vtt_file = "#{target_dir}/transcript_diarized.vtt"
-    transcript_cues = File.exist?(vtt_file) ? WebVTTParser.parse(vtt_file) : []
 
     # Extract action items using LLM
     action_items = NotesExtractors::ActionItemsExtractor.extract(

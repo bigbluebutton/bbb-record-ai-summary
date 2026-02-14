@@ -71,6 +71,22 @@ module WebVTTParser
     []
   end
 
+  # Convert cues array to SRT format
+  def self.to_srt(cues)
+    lines = []
+
+    cues.each_with_index do |cue, index|
+      lines << (index + 1).to_s
+      start_ts = cue[:start].gsub('.', ',')
+      end_ts = cue[:end].gsub('.', ',')
+      lines << "#{start_ts} --> #{end_ts}"
+      lines << "#{cue[:speaker]}: #{cue[:text]}"
+      lines << ''
+    end
+
+    lines.join("\n")
+  end
+
   # Convert cues array back to WebVTT format (utility method)
   def self.to_webvtt(cues)
     lines = ['WEBVTT', '']

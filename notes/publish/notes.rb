@@ -159,6 +159,18 @@ begin
   FileUtils.cp("#{process_dir}/metadata.xml", target_dir)
   BigBlueButton.logger.info("Copied metadata.xml file")
 
+  # Generate notes.srt from diarized transcript if available
+  vtt_path = "#{process_dir}/transcript_diarized.vtt"
+  if File.exist?(vtt_path)
+    require_relative '../lib/helpers/webvtt_parser'
+    cues = WebVTTParser.parse(vtt_path)
+    srt_content = WebVTTParser.to_srt(cues)
+    File.write("#{target_dir}/notes.srt", srt_content)
+    BigBlueButton.logger.info("Generated notes.srt with #{cues.length} cues from diarized transcript")
+  else
+    BigBlueButton.logger.info("No transcript_diarized.vtt found, skipping SRT generation")
+  end
+
   metadata_path = "#{target_dir}/metadata.xml"
   update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, BigBlueButton.logger)
 

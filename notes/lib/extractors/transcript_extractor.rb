@@ -3,6 +3,15 @@
 
 module NotesExtractors
   class TranscriptExtractor
+    # Minimum average token confidence to keep a segment (0.0-1.0)
+    MIN_SEGMENT_CONFIDENCE = 0.4
+    # Minimum meaningful words a track must produce to be included
+    MIN_TRACK_WORDS = 3
+    # Maximum characters in a single VTT cue text before splitting at sentence boundaries
+    MAX_CUE_CHARS = 200
+    # Maximum duration (ms) for a single VTT cue before splitting
+    MAX_CUE_DURATION_MS = 15_000
+
     def self.extract(raw_archive_dir, target_dir, logger, events_doc = nil)
       # Set up paths
       script_dir = File.expand_path('../../..', __dir__)  # Project root
@@ -17,7 +26,7 @@ module NotesExtractors
       if events_doc
         audio_tracks = extract_audio_track_mappings(events_doc, logger)
 
-        # If we have per-speaker audio tracks, use new method
+        # If we have per-speaker audio tracks, use segment-level method
         unless audio_tracks.empty?
           logger.info("Using per-speaker transcription (#{audio_tracks.size} tracks)")
 
@@ -28,23 +37,23 @@ module NotesExtractors
             return nil
           end
 
-          # Transcribe each speaker's audio tracks
-          words = transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks,
-                                                transcribe_script, logger)
+          # Transcribe each speaker's audio tracks (segment-level)
+          segments = transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks,
+                                                    transcribe_script, logger)
 
-          if words.empty?
-            logger.warn("No words extracted from per-speaker transcription")
+          if segments.empty?
+            logger.warn("No segments extracted from per-speaker transcription")
           else
             # Merge and format transcript with relative timestamps
-            diarized = merge_and_format_transcript(words, recording_start, logger)
+            diarized = merge_and_format_transcript(segments, recording_start, logger)
 
             # Save diarized transcript in WebVTT format
             diarized_file = "#{target_dir}/transcript_diarized.vtt"
             File.write(diarized_file, diarized)
             logger.info("Saved diarized transcript (WebVTT): #{diarized_file}")
 
-            # Also create a plain text version (just the text without timestamps/speakers)
-            plain_text = words.map { |w| w[:text] }.join('')
+            # Create plain text version with speaker labels
+            plain_text = generate_plain_text(segments, recording_start)
             transcript_file = "#{target_dir}/transcript.txt"
             File.write(transcript_file, plain_text)
 
@@ -276,12 +285,18 @@ module NotesExtractors
       nil  # No match found within tolerance
     end
 
-    # Transcribe per-speaker audio tracks and return word-level entries
-    # Returns array of: { abs_timestamp:, abs_end_timestamp:, user_id:, name:, text: }
+    # Transcribe per-speaker audio tracks and return segment-level entries
+    # Returns array of: { abs_start:, abs_end:, user_id:, name:, text:, confidence: }
     def self.transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks, transcribe_script, logger)
-      all_words = []
+      all_segments = []
 
       audio_tracks.each do |basename, track_info|
+        # [Improvement 1] Skip screen share audio tracks - they contain tab/presentation audio, not speech
+        if basename.start_with?('screen_share_audio')
+          logger.info("Skipping screen share audio track: #{basename}")
+          next
+        end
+
         audio_file = "#{raw_archive_dir}/audio/#{basename}"
 
         unless File.exist?(audio_file)
@@ -302,47 +317,54 @@ module NotesExtractors
           next
         end
 
-        # Parse JSON and extract words with absolute timestamps
+        # [Improvement 2] Extract at segment level (not token level)
         begin
           json_data = JSON.parse(File.read(json_file))
           transcription = json_data['transcription'] || []
 
-          words_before = all_words.size
+          track_segments = []
 
           transcription.each do |segment|
             next unless segment['tokens']
 
             # Skip entire segment if it's just noise description
-            segment_text = segment['text'].to_s
+            segment_text = segment['text'].to_s.strip
+            next if segment_text.empty?
             next if is_noise_segment?(segment_text)
 
-            segment['tokens'].each do |token|
-              # Skip special tokens and their fragments
-              text = token['text'].to_s
-              text_trimmed = text.strip
-              next if text_trimmed.start_with?('[_') || text_trimmed == '[_BEG_]' || text_trimmed == '[_END_]' || text_trimmed == '[BLANK_AUDIO]'
-              next if is_special_marker_fragment?(text)
+            # [Improvement 3] Calculate average confidence from non-special tokens
+            real_tokens = segment['tokens'].reject { |t| is_special_token?(t['text'].to_s) }
+            next if real_tokens.empty?
 
-              # Parse timestamp from "HH:MM:SS,mmm" format to milliseconds
-              from_ms = parse_timestamp(token['timestamps']['from'])
-              to_ms = parse_timestamp(token['timestamps']['to'])
+            avg_confidence = real_tokens.sum { |t| t['p'].to_f } / real_tokens.size
 
-              # Convert to absolute timestamp by adding track's start time
-              abs_from = track_info[:timestamp_utc] + from_ms
-              abs_to = track_info[:timestamp_utc] + to_ms
-
-              all_words << {
-                abs_timestamp: abs_from,
-                abs_end_timestamp: abs_to,
-                user_id: track_info[:user_id],
-                name: track_info[:name],
-                text: text
-              }
+            if avg_confidence < MIN_SEGMENT_CONFIDENCE
+              logger.info("Skipping low-confidence segment (#{format('%.2f', avg_confidence)}): #{segment_text[0..60]}")
+              next
             end
+
+            from_ms = segment['offsets']['from']
+            to_ms = segment['offsets']['to']
+
+            track_segments << {
+              abs_start: track_info[:timestamp_utc] + from_ms,
+              abs_end: track_info[:timestamp_utc] + to_ms,
+              user_id: track_info[:user_id],
+              name: track_info[:name],
+              text: segment_text,
+              confidence: avg_confidence
+            }
           end
 
-          words_extracted = all_words.size - words_before
-          logger.info("Extracted #{words_extracted} words from #{basename}")
+          # [Improvement 4] Skip tracks that produce too few meaningful words
+          total_words = track_segments.sum { |s| s[:text].split.size }
+          if total_words < MIN_TRACK_WORDS
+            logger.info("Skipping track #{basename}: only #{total_words} words (min: #{MIN_TRACK_WORDS})")
+            next
+          end
+
+          logger.info("Extracted #{track_segments.size} segments (#{total_words} words) from #{basename}")
+          all_segments.concat(track_segments)
         rescue JSON::ParserError => e
           logger.error("Failed to parse JSON for #{basename}: #{e.message}")
         rescue => e
@@ -350,9 +372,9 @@ module NotesExtractors
         end
       end
 
-      all_words.sort_by! { |w| w[:abs_timestamp] }
-      logger.info("Total words extracted: #{all_words.size}")
-      all_words
+      all_segments.sort_by! { |s| s[:abs_start] }
+      logger.info("Total segments extracted: #{all_segments.size}")
+      all_segments
     end
 
     # Parse timestamp string "HH:MM:SS,mmm" to milliseconds
@@ -373,6 +395,7 @@ module NotesExtractors
 
     # Format timestamp from milliseconds to "HH:MM:SS.mmm"
     def self.format_timestamp(ms)
+      ms = [ms, 0].max  # Clamp to non-negative
       total_seconds = ms / 1000
       millis = ms % 1000
 
@@ -383,26 +406,13 @@ module NotesExtractors
       format("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
     end
 
-    # Check if text is just punctuation (with optional whitespace)
-    def self.is_punctuation_only?(text)
-      text.strip.match?(/^[.,!?;:]+$/)
-    end
-
-    # Check if token appears to be part of a special marker (BLANK_AUDIO fragments, etc.)
-    def self.is_special_marker_fragment?(text)
+    # Check if token text is a special whisper token (not real speech)
+    def self.is_special_token?(text)
       trimmed = text.strip
-      # Catch fragments like: [, ], BLANK, _, AUDIO, AUD, IO, BEG, END, TT, ANK, BL, sil, ence, etc.
-      return true if trimmed.match?(/^[\[\]()]$/)  # Just brackets/parens
-      return true if trimmed.match?(/^(BLANK|AUDIO|AUD|ANK|BL|IO|BEG|END|TT|_|sil|ence)$/i)  # Marker keywords/fragments
-
-      # Catch noise descriptions in parentheses like "(keyboard clicking)"
-      return true if trimmed.match?(/^\(.*?(keyboard|clicking|typing|noise|coughing|laughing).*?\)$/i)
-
-      # Catch individual noise-related words (full words, not fragments to avoid false positives)
-      lower = trimmed.downcase
-      return true if lower.include?('keyboard') || lower.include?('clicking') || lower.include?('typing')
-      return true if lower.include?('coughing') || lower.include?('laughing')
-
+      return true if trimmed.start_with?('[_')
+      return true if trimmed == '[BLANK_AUDIO]'
+      return true if trimmed.match?(/^[\[\]()]$/)
+      return true if trimmed.match?(/^(BLANK|AUDIO|AUD|ANK|BL|IO|BEG|END|TT|_|sil|ence)$/i)
       false
     end
 
@@ -414,112 +424,136 @@ module NotesExtractors
       trimmed.match?(/^\s*\([^)]*(?:keyboard|clicking|typing|noise|coughing|laughing|silence)[^)]*\)\s*$/i)
     end
 
-    # Merge word entries and format as speaker-attributed transcript in WebVTT format
-    # recording_start is in milliseconds (UTC timestamp)
-    def self.merge_and_format_transcript(words, recording_start, logger)
-      return "" if words.empty?
+    # [Improvement 2+5] Merge segments and format as speaker-attributed WebVTT
+    # Works at segment level (not word level) to preserve sentence coherence
+    # Splits long cues at sentence boundaries
+    def self.merge_and_format_transcript(segments, recording_start, logger)
+      return "" if segments.empty?
 
-      # Start with WebVTT header
       lines = ["WEBVTT", ""]
 
-      # Configuration: Look ahead to see if speaker truly changed or just brief interjection
-      min_words_for_speaker_change = 2  # Need at least 2 consecutive words from new speaker
-
+      # Group consecutive segments by speaker, then emit VTT cues
       current_speaker_id = nil
       current_speaker_name = nil
-      current_text = []
-      segment_start = nil
-      segment_end = nil
+      current_texts = []     # accumulated text pieces for current cue
+      cue_start = nil        # absolute timestamp of cue start
+      cue_end = nil          # absolute timestamp of cue end
 
-      i = 0
-      while i < words.length
-        word = words[i]
+      segments.each do |seg|
+        speaker_changed = current_speaker_id && current_speaker_id != seg[:user_id]
+        cue_too_long = cue_start && (
+          current_texts.join(' ').length >= MAX_CUE_CHARS ||
+          (seg[:abs_end] - cue_start) > MAX_CUE_DURATION_MS
+        )
 
-        # Skip special marker fragments
-        if is_special_marker_fragment?(word[:text])
-          i += 1
-          next
+        # Emit current cue if speaker changed or cue too long
+        if (speaker_changed || cue_too_long) && !current_texts.empty?
+          emit_cues(lines, current_speaker_name, current_texts.join(' '), cue_start, cue_end, recording_start)
+          current_texts = []
+          cue_start = nil
         end
 
-        # Check if speaker changed
-        if current_speaker_id && current_speaker_id != word[:user_id]
-          # Count how many consecutive words the new speaker has
-          # Skip over punctuation-only tokens from other speakers
-          consecutive_count = 0
-          j = i
-          new_speaker_id = word[:user_id]
-
-          while j < words.length
-            current_word = words[j]
-
-            # Skip special markers
-            if is_special_marker_fragment?(current_word[:text])
-              j += 1
-              next
-            end
-
-            # If it's the new speaker, count it
-            if current_word[:user_id] == new_speaker_id
-              consecutive_count += 1
-              j += 1
-            # If it's a different speaker but just punctuation, skip it
-            elsif is_punctuation_only?(current_word[:text])
-              j += 1
-            # Otherwise we hit a real word from a different speaker, stop counting
-            else
-              break
-            end
-          end
-
-          # If new speaker has enough consecutive words, this is a real speaker change
-          if consecutive_count >= min_words_for_speaker_change
-            # Output current segment
-            unless current_text.empty?
-              relative_start = segment_start - recording_start
-              relative_end = segment_end - recording_start
-
-              timestamp_range = "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
-              lines << timestamp_range
-              lines << "#{current_speaker_name}: #{current_text.join('').strip}"
-              lines << ""
-            end
-
-            # Start new segment
-            current_speaker_id = word[:user_id]
-            current_speaker_name = word[:name]
-            current_text = []
-            segment_start = word[:abs_timestamp]
-          else
-            # Otherwise, it's a brief interjection - skip this word and continue with current speaker
-            i += 1
-            next
-          end
+        # Initialize or update speaker
+        if current_speaker_id.nil? || speaker_changed
+          current_speaker_id = seg[:user_id]
+          current_speaker_name = seg[:name]
         end
 
-        # Initialize first segment
-        if current_speaker_id.nil?
-          current_speaker_id = word[:user_id]
-          current_speaker_name = word[:name]
-          segment_start = word[:abs_timestamp]
-        end
-
-        # Add word to current segment
-        segment_end = word[:abs_end_timestamp]
-        current_text << word[:text]
-        i += 1
+        cue_start ||= seg[:abs_start]
+        cue_end = seg[:abs_end]
+        current_texts << seg[:text]
       end
 
-      # Output final segment
-      unless current_text.empty?
-        relative_start = segment_start - recording_start
-        relative_end = segment_end - recording_start
-
-        timestamp_range = "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
-        lines << timestamp_range
-        lines << "#{current_speaker_name}: #{current_text.join('').strip}"
+      # Emit final cue
+      unless current_texts.empty?
+        emit_cues(lines, current_speaker_name, current_texts.join(' '), cue_start, cue_end, recording_start)
       end
 
-      logger.info("Generated #{lines.size} transcript lines")
+      logger.info("Generated WebVTT with #{lines.count { |l| l.include?('-->') }} cues")
+      lines.join("\n")
+    end
+
+    # [Improvement 5] Emit one or more VTT cues, splitting long text at sentence boundaries
+    def self.emit_cues(lines, speaker_name, full_text, abs_start, abs_end, recording_start)
+      text = full_text.strip
+      return if text.empty?
+
+      # If short enough, emit as single cue
+      if text.length <= MAX_CUE_CHARS
+        relative_start = abs_start - recording_start
+        relative_end = abs_end - recording_start
+        lines << "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
+        lines << "#{speaker_name}: #{text}"
+        lines << ""
+        return
+      end
+
+      # Split at sentence boundaries for long text
+      sentences = split_into_sentences(text)
+      total_duration = abs_end - abs_start
+      total_chars = text.length
+
+      # Distribute time proportionally across sentences
+      current_offset = 0
+      current_group = []
+      current_group_chars = 0
+      group_start_chars = 0
+
+      sentences.each_with_index do |sentence, idx|
+        current_group << sentence
+        current_group_chars += sentence.length
+
+        # Emit group if it's long enough or it's the last sentence
+        at_end = (idx == sentences.length - 1)
+        group_text = current_group.join(' ')
+
+        if group_text.length >= MAX_CUE_CHARS / 2 || at_end
+          # Calculate proportional timestamps
+          char_ratio_start = total_chars > 0 ? group_start_chars.to_f / total_chars : 0
+          char_ratio_end = total_chars > 0 ? (group_start_chars + current_group_chars).to_f / total_chars : 1
+
+          cue_abs_start = abs_start + (total_duration * char_ratio_start).to_i
+          cue_abs_end = abs_start + (total_duration * char_ratio_end).to_i
+
+          relative_start = cue_abs_start - recording_start
+          relative_end = cue_abs_end - recording_start
+
+          lines << "#{format_timestamp(relative_start)} --> #{format_timestamp(relative_end)}"
+          lines << "#{speaker_name}: #{group_text.strip}"
+          lines << ""
+
+          group_start_chars += current_group_chars
+          current_group = []
+          current_group_chars = 0
+        end
+      end
+    end
+
+    # Split text into sentences at .!? boundaries
+    def self.split_into_sentences(text)
+      # Split on sentence-ending punctuation followed by space or end of string
+      # Keep the punctuation with the sentence
+      sentences = text.scan(/[^.!?]*[.!?]+(?:\s|$)|[^.!?]+$/).map(&:strip).reject(&:empty?)
+      # If scanning didn't produce results, return the whole text
+      sentences.empty? ? [text] : sentences
+    end
+
+    # Generate plain text transcript with speaker labels
+    def self.generate_plain_text(segments, recording_start)
+      return "" if segments.empty?
+
+      lines = []
+      current_speaker_id = nil
+
+      segments.each do |seg|
+        if seg[:user_id] != current_speaker_id
+          current_speaker_id = seg[:user_id]
+          lines << "" unless lines.empty?
+          lines << "#{seg[:name]}:"
+        end
+        lines << seg[:text]
+      end
+
       lines.join("\n")
     end
 
