@@ -1,2 +1,3 @@
 publish_dir: /home/ubuntu/dev/bbb-playback-ai/recording/publish/notes
 format: pdf
+whisper_threads: 4

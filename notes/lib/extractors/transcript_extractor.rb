@@ -12,7 +12,7 @@ module NotesExtractors
     # Maximum duration (ms) for a single VTT cue before splitting
     MAX_CUE_DURATION_MS = 15_000
 
-    def self.extract(raw_archive_dir, target_dir, logger, events_doc = nil)
+    def self.extract(raw_archive_dir, target_dir, logger, events_doc = nil, config = {})
       # Set up paths
       script_dir = File.expand_path('../../..', __dir__)  # Project root
       transcribe_script = "#{script_dir}/transcribe.sh"
@@ -21,6 +21,8 @@ module NotesExtractors
       unless File.exist?(transcribe_script)
         raise "Transcription script not found: #{transcribe_script}"
       end
+
+      whisper_threads = config['whisper_threads']&.to_s
 
       # Try per-speaker transcription if events_doc provided
       if events_doc
@@ -39,11 +41,18 @@ module NotesExtractors
 
           # Transcribe each speaker's audio tracks (segment-level)
           segments = transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks,
-                                                    transcribe_script, logger)
+                                                    transcribe_script, logger,
+                                                    whisper_threads: whisper_threads)
 
           if segments.empty?
             logger.warn("No segments extracted from per-speaker transcription")
           else
+            # Resolve overlapping segments from different speakers
+            segments = resolve_speaker_overlaps(segments, logger)
+
+            # Strip word timings — no longer needed after overlap resolution
+            segments.each { |s| s.delete(:words) }
+
             # Merge and format transcript with relative timestamps
             diarized = merge_and_format_transcript(segments, recording_start, logger)
 
@@ -81,7 +90,8 @@ module NotesExtractors
       transcript_json = "#{target_dir}/transcript.json"
 
       # Run transcription (plain text for backward compatibility)
-      success = system(transcribe_script, audio_file, transcript_file)
+      success = run_transcribe(transcribe_script, audio_file, transcript_file,
+                               threads: whisper_threads)
 
       unless success
         raise "Transcription failed with exit code #{$?.exitstatus}"
@@ -105,7 +115,8 @@ module NotesExtractors
       if events_doc
         diarized = generate_diarized_transcript(raw_archive_dir, target_dir, logger,
                                                  events_doc, transcribe_script, audio_file,
-                                                 transcript_json)
+                                                 transcript_json,
+                                                 whisper_threads: whisper_threads)
 
         return { plain: transcript, diarized: diarized } if diarized
       end
@@ -116,9 +127,15 @@ module NotesExtractors
 
     private
 
+    # Run transcribe.sh with optional WHISPER_THREADS env var
+    def self.run_transcribe(script, *args, threads: nil)
+      env = threads ? { 'WHISPER_THREADS' => threads } : {}
+      system(env, script, *args)
+    end
+
     def self.generate_diarized_transcript(raw_archive_dir, target_dir, logger,
                                           events_doc, transcribe_script, audio_file,
-                                          transcript_json)
+                                          transcript_json, whisper_threads: nil)
       logger.info("Generating diarized transcript...")
 
       # Extract participant mapping (userId => name)
@@ -147,7 +164,8 @@ module NotesExtractors
 
       # Run whisper with JSON output
       logger.info("Running whisper with JSON output for diarization...")
-      success = system(transcribe_script, audio_file, transcript_json, '--json')
+      success = run_transcribe(transcribe_script, audio_file, transcript_json, '--json',
+                               threads: whisper_threads)
 
       unless success || File.exist?(transcript_json)
         logger.warn("JSON transcription failed, skipping diarization")
@@ -287,7 +305,7 @@ module NotesExtractors
 
     # Transcribe per-speaker audio tracks and return segment-level entries
     # Returns array of: { abs_start:, abs_end:, user_id:, name:, text:, confidence: }
-    def self.transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks, transcribe_script, logger)
+    def self.transcribe_per_speaker_tracks(raw_archive_dir, target_dir, audio_tracks, transcribe_script, logger, whisper_threads: nil)
       all_segments = []
 
       audio_tracks.each do |basename, track_info|
@@ -310,7 +328,8 @@ module NotesExtractors
         json_file = "#{target_dir}/#{basename}.json"
 
         # Run transcription with full JSON output
-        success = system(transcribe_script, audio_file, json_file, '--json-full')
+        success = run_transcribe(transcribe_script, audio_file, json_file, '--json-full',
+                                 threads: whisper_threads)
 
         unless success && File.exist?(json_file)
           logger.warn("Failed to transcribe #{basename}, skipping")
@@ -346,13 +365,23 @@ module NotesExtractors
             from_ms = segment['offsets']['from']
             to_ms = segment['offsets']['to']
 
+            # Collect per-word timing for overlap resolution
+            word_timings = real_tokens.map { |t|
+              {
+                text: t['text'].to_s,
+                abs_start: track_info[:timestamp_utc] + t['offsets']['from'],
+                abs_end: track_info[:timestamp_utc] + t['offsets']['to']
+              }
+            }
+
             track_segments << {
               abs_start: track_info[:timestamp_utc] + from_ms,
               abs_end: track_info[:timestamp_utc] + to_ms,
               user_id: track_info[:user_id],
               name: track_info[:name],
               text: segment_text,
-              confidence: avg_confidence
+              confidence: avg_confidence,
+              words: word_timings
             }
           end
 
@@ -375,6 +404,146 @@ module NotesExtractors
       all_segments.sort_by! { |s| s[:abs_start] }
       logger.info("Total segments extracted: #{all_segments.size}")
       all_segments
+    end
+
+    # Resolve overlapping segments from different speakers by splitting at word boundaries
+    # Uses per-word timestamps to split the earlier segment around the interruption
+    def self.resolve_speaker_overlaps(segments, logger)
+      return segments if segments.size < 2
+
+      # Work with a queue sorted by abs_start
+      pending = segments.sort_by { |s| s[:abs_start] }
+      result = []
+
+      while (seg = pending.shift)
+        # Scan result backwards for overlap from a different speaker
+        overlap_idx = nil
+        result.each_with_index.reverse_each do |prev, idx|
+          if prev[:abs_end] > seg[:abs_start] && prev[:user_id] != seg[:user_id]
+            overlap_idx = idx
+            break
+          end
+        end
+
+        if overlap_idx
+          prev = result[overlap_idx]
+
+          if prev[:abs_end] > seg[:abs_end]
+            # Case A: prev wraps around seg (interjection pattern)
+            # Split prev at seg start, re-queue remainder after seg
+            split_time = seg[:abs_start]
+            first_part, second_part = split_segment_at_time(prev, split_time)
+
+            if first_part
+              result[overlap_idx] = first_part
+            else
+              result.delete_at(overlap_idx)
+            end
+
+            result << seg
+
+            if second_part
+              second_part[:abs_start] = seg[:abs_end]
+              second_part[:abs_end] = prev[:abs_end]
+              if second_part[:abs_end] > second_part[:abs_start]
+                insert_idx = pending.bsearch_index { |s| s[:abs_start] >= second_part[:abs_start] } || pending.size
+                pending.insert(insert_idx, second_part)
+              end
+            end
+          else
+            # Case B: seg extends past prev (prev is shorter)
+            # Keep prev in result, re-queue seg to start after prev ends
+            seg_adjusted = seg.merge(abs_start: prev[:abs_end])
+            if seg_adjusted[:abs_end] > seg_adjusted[:abs_start]
+              insert_idx = pending.bsearch_index { |s| s[:abs_start] >= seg_adjusted[:abs_start] } || pending.size
+              pending.insert(insert_idx, seg_adjusted)
+            end
+          end
+        else
+          result << seg
+        end
+      end
+
+      logger.info("After overlap resolution: #{result.size} segments (was #{segments.size})")
+      result
+    end
+
+    # Split a segment into two parts at the given time using word-level timestamps
+    # Returns [first_part, second_part] — either may be nil if it would be empty
+    def self.split_segment_at_time(segment, split_time)
+      words = segment[:words]
+
+      # Fallback: proportional text split if no word timings
+      unless words && !words.empty?
+        return split_segment_proportional(segment, split_time)
+      end
+
+      # Find the first word that starts at or after split_time
+      split_idx = words.index { |w| w[:abs_start] >= split_time }
+
+      # All words before split_time — nothing to split off
+      if split_idx.nil?
+        return [segment, nil]
+      end
+
+      # All words after split_time — nothing in first part
+      if split_idx == 0
+        return [nil, segment]
+      end
+
+      first_words = words[0...split_idx]
+      second_words = words[split_idx..]
+
+      first_text = first_words.map { |w| w[:text] }.join('').strip
+      second_text = second_words.map { |w| w[:text] }.join('').strip
+
+      first_part = if first_text.empty?
+                     nil
+                   else
+                     segment.merge(
+                       text: first_text,
+                       words: first_words,
+                       abs_end: [first_words.last[:abs_end], split_time].min
+                     )
+                   end
+
+      second_part = if second_text.empty?
+                      nil
+                    else
+                      segment.merge(
+                        text: second_text,
+                        words: second_words,
+                        abs_start: second_words.first[:abs_start]
+                      )
+                    end
+
+      [first_part, second_part]
+    end
+
+    # Fallback: split segment text proportionally when word timings unavailable
+    def self.split_segment_proportional(segment, split_time)
+      total_duration = segment[:abs_end] - segment[:abs_start]
+      return [segment, nil] if total_duration <= 0
+
+      ratio = (split_time - segment[:abs_start]).to_f / total_duration
+      ratio = [[ratio, 0.0].max, 1.0].min
+
+      all_words = segment[:text].split
+      split_word_idx = (all_words.size * ratio).round
+
+      if split_word_idx <= 0
+        return [nil, segment]
+      elsif split_word_idx >= all_words.size
+        return [segment, nil]
+      end
+
+      first_text = all_words[0...split_word_idx].join(' ')
+      second_text = all_words[split_word_idx..].join(' ')
+
+      first_part = first_text.empty? ? nil : segment.merge(text: first_text, abs_end: split_time, words: nil)
+      second_part = second_text.empty? ? nil : segment.merge(text: second_text, abs_start: split_time, words: nil)
+
+      [first_part, second_part]
     end
 
     # Parse timestamp string "HH:MM:SS,mmm" to milliseconds

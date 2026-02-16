@@ -169,7 +169,7 @@ unless FileTest.directory?(target_dir)
 
     # Extract all other data using extractors
     attendees = NotesExtractors::AttendeesExtractor.extract(events_doc, BigBlueButton.logger)
-    transcript = NotesExtractors::TranscriptExtractor.extract(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc)
+    transcript = NotesExtractors::TranscriptExtractor.extract(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc, notes_props)
     polls = NotesExtractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
 
     # Handle transcript format (can be string or hash with plain/diarized)

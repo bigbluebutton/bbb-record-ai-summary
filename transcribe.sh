@@ -33,6 +33,9 @@ if [ -z "$1" ]; then
     echo ""
     echo "Supported formats: wav, mp3, opus, ogg, m4a, flac"
     echo "Note: Non-WAV files will be converted to WAV automatically using ffmpeg"
+    echo ""
+    echo "Environment variables:"
+    echo "  WHISPER_THREADS  Number of threads for whisper.cpp (default: whisper-cli default)"
     exit 1
 fi
 
@@ -109,6 +112,10 @@ if [ -n "$OUTPUT_FILE" ]; then
 
     # Build whisper command arguments
     WHISPER_ARGS=(-m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en $WHISPER_FMT -of "$OUTPUT_BASE")
+    # Add thread count if specified
+    if [ -n "$WHISPER_THREADS" ]; then
+        WHISPER_ARGS+=(-t "$WHISPER_THREADS")
+    fi
     # Only add --no-timestamps for plain text output
     if [ "$FORMAT_FLAG" != "--json-full" ] && [ "$FORMAT_FLAG" != "--json" ]; then
         WHISPER_ARGS+=(--no-timestamps)
@@ -132,7 +139,11 @@ if [ -n "$OUTPUT_FILE" ]; then
     echo "✓ Transcription complete: $OUTPUT_FILE"
 else
     # Output to stdout (always plain text)
-    "$WHISPER_BIN" -m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt --no-timestamps 2>/dev/null
+    WHISPER_ARGS=(-m "$MODEL" -f "$AUDIO_TO_PROCESS" -l en -otxt --no-timestamps)
+    if [ -n "$WHISPER_THREADS" ]; then
+        WHISPER_ARGS+=(-t "$WHISPER_THREADS")
+    fi
+    "$WHISPER_BIN" "${WHISPER_ARGS[@]}" 2>/dev/null
 fi
 
 # Cleanup temp file
