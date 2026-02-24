@@ -110,3 +110,42 @@ The transcription system uses intelligent segmentation to create natural convers
 - `transcript_diarized.vtt` - WebVTT format with speaker labels and timestamps
 - `notes.md` - Markdown summary with embedded transcript
 - `summary.txt` - AI-generated meeting summary (if LLM configured)
+
+## Deployment
+
+### Usage
+
+`deploy.sh` — Deploy ai-summary recording format and post_archive scripts to BigBlueButton
+Deployment paths:
+  `src/scripts/post_archive/`  → `/usr/local/bigbluebutton/core/scripts/post_archive/`
+  `src/ai-summary/process/`           →  /usr/local/bigbluebutton/core/scripts/process/ 
+/usr/local/bigbluebutton/core/scripts/publish/
+  src/ai-summary/ai-summary.yml           → /usr/local/bigbluebutton/core/scripts/
+  src/ai-summary/ai-summary-playback.nginx → /usr/share/bigbluebutton/nginx/
+Usage:
+  ./deploy.sh [--dry-run]
+
+### After deployment
+
+After the deployment is complete, next step — wire ai-summary into the BBB recording pipeline.
+Edit `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml` and update the 'steps' block:
+
+```yml
+  steps:
+    archive: "sanity"
+    sanity: "captions"
+    captions:
+      - "process:presentation"
+      - "process:ai-summary"
+    "process:presentation": "publish:presentation"
+    "process:ai-summary": "publish:ai-summary"
+```
+
+Then restart the recording worker:
+
+```bash
+systemctl restart bbb-rap-resque-worker
+```
+
+Tip: place a custom transcribe.sh in `/usr/local/bigbluebutton/core/scripts/post_archive/` to override the `whisper.cpp` fallback.
+

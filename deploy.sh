@@ -1,15 +1,4 @@
 #!/bin/bash
-# deploy.sh — Deploy ai-summary recording format and post_archive scripts to BigBlueButton
-#
-# Deploys:
-#   src/scripts/post_archive/  → /usr/local/bigbluebutton/core/scripts/post_archive/
-#   src/ai-summary/            → /usr/local/bigbluebutton/core/scripts/ai-summary/
-#                                 (plus wrapper stubs at scripts/process/ and scripts/publish/)
-#   src/ai-summary/ai-summary.yml           → /usr/local/bigbluebutton/core/scripts/
-#   src/ai-summary/ai-summary-playback.nginx → /usr/share/bigbluebutton/nginx/
-#
-# Usage:
-#   ./deploy.sh [--dry-run]
 
 set -euo pipefail
 
@@ -159,31 +148,3 @@ chown -R $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER /var/bigbluebutton/published/ai
 
 mkdir -p /var/bigbluebutton/recording/publish/ai-summary
 chown -R $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER /var/bigbluebutton/recording/publish/ai-summary
-
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
-echo "=== Deploy complete ==="
-echo ""
-echo "Next step — wire ai-summary into the BBB recording pipeline."
-echo ""
-echo "Edit $BBB_SCRIPTS/bigbluebutton.yml and update the 'steps' block:"
-echo ""
-echo "  steps:"
-echo "    archive: \"sanity\""
-echo "    sanity: \"captions\""
-echo "    captions:"
-echo "      - \"process:presentation\""
-echo "      - \"process:ai-summary\""
-echo "    \"process:presentation\": \"publish:presentation\""
-echo "    \"process:ai-summary\": \"publish:ai-summary\""
-echo ""
-echo "Then restart the recording worker:"
-echo "  systemctl restart bbb-rap-resque-worker"
-echo ""
-echo "NOTE: 'bbb-record --enable ai-summary' only renames .rb.bk ↔ .rb files"
-echo "      and does NOT modify bigbluebutton.yml. Edit the steps block above."
-echo ""
-echo "Tip: place a custom transcribe.sh in $BBB_SCRIPTS/post_archive/ to"
-echo "     override the whisper.cpp fallback."
-echo "     Interface: transcribe.sh <audio_file> <output_json_file>"
