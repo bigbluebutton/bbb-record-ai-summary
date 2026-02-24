@@ -16,7 +16,7 @@
 # with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
 #
 
-        location /notes {
+        location /ai-summary {
                 root    /var/bigbluebutton/published;
                 index  index.html index.htm;
         }

@@ -26,21 +26,27 @@ require 'optimist'
 require 'yaml'
 require 'builder'
 
-# Helper method to parse meeting ID and playback format
+FORMAT_NAME = 'ai-summary'.freeze
+
+# Helper method to parse meeting ID and playback format.
+# Strips the known "-ai-summary" suffix rather than splitting on the last hyphen,
+# because the format name itself contains a hyphen.
 def parse_meeting_id(meeting_id_with_format)
-  match = /(.*)-(.*)/.match(meeting_id_with_format)
-  [match[1], match[2]]  # Returns [meeting_id, playback_format]
+  suffix = "-#{FORMAT_NAME}"
+  meeting_id = meeting_id_with_format.delete_suffix(suffix)
+  format     = meeting_id_with_format.end_with?(suffix) ? FORMAT_NAME : nil
+  [meeting_id, format]
 end
 
 # Helper method to convert markdown to PDF using pandoc
-def convert_markdown_to_pdf(source_md, output_pdf, target_dir, note_file, logger)
+def convert_markdown_to_pdf(source_md, output_pdf, target_dir, ai_summary_file, logger)
   unless File.exist?(source_md)
-    logger.warn("notes.md not found at #{source_md}, using original PDF")
-    FileUtils.cp(note_file, target_dir)
+    logger.warn("ai-summary.md not found at #{source_md}, using original PDF")
+    FileUtils.cp(ai_summary_file, target_dir)
     return false
   end
 
-  logger.info("Converting notes.md to PDF with pandoc")
+  logger.info("Converting ai-summary.md to PDF with pandoc")
   logger.info("Source: #{source_md}")
   logger.info("Output: #{output_pdf}")
 
@@ -52,13 +58,13 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, note_file, logger
     logger.info("PDF size: #{File.size(output_pdf)} bytes")
 
     # Also copy the markdown file to publish directory
-    FileUtils.cp(source_md, "#{target_dir}/notes.md")
-    logger.info("Copied notes.md to publish directory")
+    FileUtils.cp(source_md, "#{target_dir}/ai-summary.md")
+    logger.info("Copied ai-summary.md to publish directory")
     true
   else
     logger.error("Pandoc conversion failed: #{result}")
     logger.warn("Falling back to original PDF")
-    FileUtils.cp(note_file, target_dir)
+    FileUtils.cp(ai_summary_file, target_dir)
     false
   end
 end
@@ -80,8 +86,8 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
   # Add playback information
   Nokogiri::XML::Builder.with(metadata.at('recording')) do |xml|
     xml.playback {
-      xml.format("notes")
-      xml.link("#{playback_protocol}://#{playback_host}/notes/#{meeting_id}/notes.#{format}")
+      xml.format("ai-summary")
+      xml.link("#{playback_protocol}://#{playback_host}/ai-summary/#{meeting_id}/ai-summary.#{format}")
       xml.duration(recording_time.to_s)
     }
   end
@@ -100,55 +106,65 @@ end
 # Parse meeting ID and format
 meeting_id, playback = parse_meeting_id(opts[:meeting_id])
 
-# Early exit if not notes format
-exit 0 unless playback == "notes"
+# Early exit if not ai-summary format
+exit 0 unless playback == "ai-summary"
 
-# Load configuration from local config directory for development
-script_dir = File.expand_path(File.dirname(__FILE__))
-project_root = File.expand_path('../..', script_dir)
-bbb_props = YAML::load(File.open("#{project_root}/config/bigbluebutton.yml"))
-notes_props = YAML::load(File.open("#{project_root}/config/notes.yml"))
+# Resolve configs — works in both local dev and production deployment
+script_dir = File.expand_path(__dir__)  # .../ai-summary/publish
+
+BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
+
+bbb_props   = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
+if script_dir.start_with?(BBB_SCRIPTS_DIR)
+  format_props = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/ai-summary.yml"))
+else
+  project_root = File.expand_path('../../..', script_dir)
+  format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary/ai-summary.yml"))
+end
 
 # Set up paths
 log_dir = bbb_props['log_dir']
 recording_dir = bbb_props['recording_dir']
 raw_archive_dir = "#{recording_dir}/raw/#{meeting_id}"
-process_dir = "#{recording_dir}/process/notes/#{meeting_id}"
-publish_dir = notes_props['publish_dir']
-format = notes_props['format']
+process_dir = "#{recording_dir}/process/ai-summary/#{meeting_id}"
+publish_dir = format_props['publish_dir']
+format = format_props['format']
 playback_protocol = bbb_props['playback_protocol']
 playback_host = bbb_props['playback_host']
-target_dir = "#{recording_dir}/publish/notes/#{meeting_id}"
+target_dir = "#{recording_dir}/publish/ai-summary/#{meeting_id}"
 
 # Set up logger
-logger = Logger.new("#{log_dir}/notes/publish-#{meeting_id}.log", 'daily')
+FileUtils.mkdir_p "#{log_dir}/ai-summary"
+logger = Logger.new("#{log_dir}/ai-summary/publish-#{meeting_id}.log", 'daily')
 BigBlueButton.logger = logger
 
-# Early exit if already published
-if FileTest.directory?(target_dir)
-  BigBlueButton.logger.info("#{target_dir} is already there")
+# Early exit if already published to final destination
+final_publish_dir = "#{publish_dir}/#{meeting_id}"
+if FileTest.directory?(final_publish_dir)
+  BigBlueButton.logger.info("#{final_publish_dir} is already published")
   exit 0
 end
 
 begin
-  # Create target directory
+  # Create target directory (remove first to clear any leftover state from a previous failed run)
   BigBlueButton.logger.info("Making dir target_dir")
+  FileUtils.rm_rf(target_dir) if File.exist?(target_dir)
   FileUtils.mkdir_p target_dir
 
   # Check if notes file exists
-  note_file = "#{process_dir}/notes.#{format}"
-  unless File.exist?(note_file)
+  ai_summary_file = "#{process_dir}/ai-summary.#{format}"
+  unless File.exist?(ai_summary_file)
     BigBlueButton.logger.info("There wasn't any note for #{meeting_id}")
-    File.write("#{recording_dir}/status/published/#{meeting_id}-notes.done", "Published #{meeting_id}")
+    File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.done", "Published #{meeting_id}")
     exit 0
   end
 
-  BigBlueButton.logger.info("Original notes file: #{note_file}")
+  BigBlueButton.logger.info("Original notes file: #{ai_summary_file}")
 
   # Convert markdown to PDF
-  source_md = "#{process_dir}/notes.md"
-  output_pdf = "#{target_dir}/notes.pdf"
-  convert_markdown_to_pdf(source_md, output_pdf, target_dir, note_file, BigBlueButton.logger)
+  source_md = "#{process_dir}/ai-summary.md"
+  output_pdf = "#{target_dir}/ai-summary.pdf"
+  convert_markdown_to_pdf(source_md, output_pdf, target_dir, ai_summary_file, BigBlueButton.logger)
 
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
@@ -158,18 +174,6 @@ begin
   BigBlueButton.logger.info("Creating metadata.xml")
   FileUtils.cp("#{process_dir}/metadata.xml", target_dir)
   BigBlueButton.logger.info("Copied metadata.xml file")
-
-  # Generate notes.srt from diarized transcript if available
-  vtt_path = "#{process_dir}/transcript_diarized.vtt"
-  if File.exist?(vtt_path)
-    require_relative '../lib/helpers/webvtt_parser'
-    cues = WebVTTParser.parse(vtt_path)
-    srt_content = WebVTTParser.to_srt(cues)
-    File.write("#{target_dir}/notes.srt", srt_content)
-    BigBlueButton.logger.info("Generated notes.srt with #{cues.length} cues from diarized transcript")
-  else
-    BigBlueButton.logger.info("No transcript_diarized.vtt found, skipping SRT generation")
-  end
 
   metadata_path = "#{target_dir}/metadata.xml"
   update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, BigBlueButton.logger)
@@ -183,7 +187,6 @@ begin
   BigBlueButton.add_playback_size_to_metadata(target_dir)
 
   # Copy to final publish location if different
-  final_publish_dir = "#{publish_dir}/#{meeting_id}"
   unless target_dir == final_publish_dir
     FileUtils.cp_r(target_dir, publish_dir)
     BigBlueButton.logger.info("Copied files to #{publish_dir}")
@@ -191,10 +194,16 @@ begin
     BigBlueButton.logger.info("Files already in publish location: #{target_dir}")
   end
 
-  BigBlueButton.logger.info("Finished publishing script notes.rb successfully.")
+  BigBlueButton.logger.info("Finished publishing script ai-summary.rb successfully.")
+
+  BigBlueButton.logger.info("Removing processed files.")
+  FileUtils.rm_r(process_dir)
+
+  BigBlueButton.logger.info("Removing published files.")
+  FileUtils.rm_r(target_dir)
 
   # Write success status file
-  File.write("#{recording_dir}/status/published/#{meeting_id}-notes.done", "Published #{meeting_id}")
+  File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.done", "Published #{meeting_id}")
 
 rescue Exception => e
   BigBlueButton.logger.error(e.message)
@@ -203,6 +212,6 @@ rescue Exception => e
   end
 
   # Write failure status file
-  File.write("#{recording_dir}/status/published/#{meeting_id}-notes.fail", "Failed Publishing #{meeting_id}")
+  File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.fail", "Failed Publishing #{meeting_id}")
   exit 1
 end
