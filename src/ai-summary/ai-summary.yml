@@ -1,4 +1,4 @@
 publish_dir: /var/bigbluebutton/published/ai-summary
 playback_dir: /usr/local/bigbluebutton/core/playback/ai-summary
-format: pdf
+format: html
 whisper_threads: 4

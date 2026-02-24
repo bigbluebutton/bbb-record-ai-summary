@@ -39,10 +39,10 @@ def parse_meeting_id(meeting_id_with_format)
 end
 
 # Helper method to convert markdown to PDF using pandoc
-def convert_markdown_to_pdf(source_md, output_pdf, target_dir, ai_summary_file, logger)
+def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, logger)
   unless File.exist?(source_md)
     logger.warn("ai-summary.md not found at #{source_md}, using original PDF")
-    FileUtils.cp(ai_summary_file, target_dir)
+    FileUtils.cp(shared_notes_pdf_file, target_dir)
     return false
   end
 
@@ -57,14 +57,11 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, ai_summary_file, 
     logger.info("Successfully generated PDF from markdown using pandoc")
     logger.info("PDF size: #{File.size(output_pdf)} bytes")
 
-    # Also copy the markdown file to publish directory
-    FileUtils.cp(source_md, "#{target_dir}/ai-summary.md")
-    logger.info("Copied ai-summary.md to publish directory")
     true
   else
     logger.error("Pandoc conversion failed: #{result}")
     logger.warn("Falling back to original PDF")
-    FileUtils.cp(ai_summary_file, target_dir)
+    FileUtils.cp(shared_notes_pdf_file, target_dir)
     false
   end
 end
@@ -151,20 +148,23 @@ begin
   FileUtils.rm_rf(target_dir) if File.exist?(target_dir)
   FileUtils.mkdir_p target_dir
 
-  # Check if notes file exists
-  ai_summary_file = "#{process_dir}/ai-summary.#{format}"
-  unless File.exist?(ai_summary_file)
-    BigBlueButton.logger.info("There wasn't any file in the process directory for #{meeting_id}")
-    File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.done", "Published #{meeting_id}")
-    exit 0
-  end
-
-  BigBlueButton.logger.info("Original notes file: #{ai_summary_file}")
-
-  # Convert markdown to PDF
+  # Convert markdown to PDF if available
+  shared_notes_pdf_file = "#{process_dir}/ai-summary.pdf"
   source_md = "#{process_dir}/ai-summary.md"
   output_pdf = "#{target_dir}/ai-summary.pdf"
-  convert_markdown_to_pdf(source_md, output_pdf, target_dir, ai_summary_file, BigBlueButton.logger)
+
+  if File.exist?(source_md)
+    conversion_successful = convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, BigBlueButton.logger)
+    if conversion_successful
+      FileUtils.cp(source_md, "#{target_dir}/ai-summary.md")
+      logger.info("Copied ai-summary.md to publish directory")
+    end
+  else
+    BigBlueButton.logger.info("No ai-summary.md found in process dir, skipping PDF conversion")
+  end
+
+  source_html = "#{process_dir}/ai-summary.html"
+  FileUtils.cp(source_html, "#{target_dir}/ai-summary.html")
 
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))

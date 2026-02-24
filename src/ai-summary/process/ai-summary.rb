@@ -824,13 +824,11 @@ else
   format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary.yml"))
 end
 
-format = format_props['format']
-
 # Set up paths
 recording_dir = props['recording_dir']
 raw_archive_dir = "#{recording_dir}/raw/#{meeting_id}"
 log_dir = props['log_dir']
-ai_summary_file = "#{raw_archive_dir}/notes/notes.#{format}"
+shared_notes_pdf_file = "#{raw_archive_dir}/notes/notes.pdf"
 target_dir = "#{recording_dir}/process/ai-summary/#{meeting_id}"
 playback_dir = format_props['playback_dir']
 
@@ -843,16 +841,13 @@ unless FileTest.directory?(target_dir)
   BigBlueButton.logger.info("Processing script ai-summary.rb")
   FileUtils.mkdir_p target_dir
 
-  # Early exit if there are no notes for this meeting
-  unless File.exist?(ai_summary_file)
-    BigBlueButton.logger.info("There wasn't any note for #{meeting_id}")
-    File.write("#{recording_dir}/status/processed/#{meeting_id}-ai-summary.done", "Processed #{meeting_id}")
-    exit 0
-  end
-
   begin
-    # Copy notes file
-    FileUtils.cp(ai_summary_file, "#{target_dir}/ai-summary.#{format}")
+    # Copy notes file if present
+    if File.exist?(shared_notes_pdf_file)
+      FileUtils.cp(shared_notes_pdf_file, "#{target_dir}/ai-summary.pdf")
+    else
+      BigBlueButton.logger.info("No notes file found for #{meeting_id}, continuing without it")
+    end
 
     # Load events.xml for metadata and extraction
     events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
@@ -939,8 +934,8 @@ unless FileTest.directory?(target_dir)
 
     # Render HTML
     html_template_path = "#{playback_dir}/ai-summary.html.erb"
-    notes_html_content = render_html_template(html_template_path, html_data)
-    File.write("#{target_dir}/ai-summary.html", notes_html_content)
+    html_content = render_html_template(html_template_path, html_data)
+    File.write("#{target_dir}/ai-summary.html", html_content)
     BigBlueButton.logger.info("Created ai-summary.html with #{attendees.length} attendees and #{transcript_cues.length} transcript cues")
 
     metadata = build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
