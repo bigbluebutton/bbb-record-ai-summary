@@ -53,8 +53,8 @@ module WebVTTParser
         next
       end
 
-      # Check if this is a timestamp line (format: "00:00:00.000 --> 00:00:00.000")
-      if line.match?(/^\d{2}:\d{2}:\d{2}\.\d{3}\s+-->\s+\d{2}:\d{2}:\d{2}\.\d{3}$/)
+      # Check if this is a timestamp line (format: "HH:MM:SS.mmm --> HH:MM:SS.mmm", hours may be >2 digits)
+      if line.match?(/^\d+:\d{2}:\d{2}\.\d{3}\s+-->\s+\d+:\d{2}:\d{2}\.\d{3}$/)
         # Parse timestamps
         timestamps = line.split('-->').map(&:strip)
         start_time = timestamps[0]
@@ -878,20 +878,20 @@ unless FileTest.directory?(target_dir)
     summary = Extractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger)
 
     # Collect all data for template
-    template_data = {
+    md_template_data = {
       notes_content: notes_content,
       word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
-      transcript_diarized: transcript_diarized,
+      transcript_diarized: transcript_cues,
       polls: polls,
       summary: summary
     }
 
     # Render markdown from ERB template
     BigBlueButton.logger.info("Rendering ai-summary.md from template")
-    template_path = "#{playback_dir}/notes.md.erb"
-    notes_md_content = render_markdown_template(template_path, template_data)
+    template_path = "#{playback_dir}/ai-summary.md.erb"
+    notes_md_content = render_markdown_template(template_path, md_template_data)
     File.write("#{target_dir}/ai-summary.md", notes_md_content)
     BigBlueButton.logger.info("Created ai-summary.md with #{word_count} words and #{attendees.length} attendees")
 
@@ -938,7 +938,7 @@ unless FileTest.directory?(target_dir)
     }
 
     # Render HTML
-    html_template_path = "#{playback_dir}/notes.html.erb"
+    html_template_path = "#{playback_dir}/ai-summary.html.erb"
     notes_html_content = render_html_template(html_template_path, html_data)
     File.write("#{target_dir}/ai-summary.html", notes_html_content)
     BigBlueButton.logger.info("Created ai-summary.html with #{attendees.length} attendees and #{transcript_cues.length} transcript cues")

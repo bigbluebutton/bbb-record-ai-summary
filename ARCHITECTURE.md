@@ -1,317 +1,337 @@
-# BigBlueButton Record & Playback Architecture
+# Architecture
 
-## Overview
+## BBB Recording Pipeline
 
-BigBlueButton processes recordings through a **6-stage pipeline**:
+BigBlueButton processes recordings through a multi-stage pipeline. Each stage is driven by the `bbb-rap-resque-worker` service, which reads the pipeline steps from `bigbluebutton.yml`.
 
 ```
-Capture → Archive → Sanity → Process → Publish → Playback
+Meeting ends
+    │
+    ▼
+┌──────────┐
+│ Archive  │  Saves raw media, events.xml, notes, audio tracks
+└────┬─────┘
+     │
+     ├──▶ post_archive hooks run here  ← transcribe_audio.rb lives here
+     │
+     ▼
+┌──────────┐
+│  Sanity  │  Validates the archive is complete
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ Captions │  (optional) Generates caption files
+└────┬─────┘
+     │
+     ├──▶ process:presentation
+     └──▶ process:ai-summary          ← process/ai-summary.rb
+              │
+              ▼
+         publish:ai-summary           ← publish/ai-summary.rb
+              │
+              ▼
+    /var/bigbluebutton/published/ai-summary/<meeting_id>/
 ```
 
-Each stage is executed by worker processes that monitor status directories and execute Ruby scripts.
+The pipeline config that wires `ai-summary` in (`/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`):
 
----
-
-## Stage Descriptions
-
-### 1. Capture
-- **What happens**: During a live session, components emit events over an event bus while media streams are stored on the server
-- **Storage locations**:
-  - Events: Redis (whiteboard, cursor, chat, etc.)
-  - Audio: `/var/freeswitch/meetings/` (Opus format)
-  - Webcam: `/var/lib/bbb-webrtc-recorder/recordings/<meetingid>`
-  - Screen sharing: `/var/lib/bbb-webrtc-recorder/screenshare/<meetingid>`
-  - Slides: `/var/bigbluebutton/<meetingid>`
-  - Shared notes: Stored via Etherpad
-
-### 2. Archive
-- **What happens**: Consolidates all captured media and events into a single raw directory
-- **Output location**: `/var/bigbluebutton/recording/raw/<meeting_id>/`
-- **Structure**:
-  ```
-  /var/bigbluebutton/recording/raw/<meeting_id>/
-  ├── events.xml          # All meeting events with timestamps
-  ├── audio/              # Audio files (e.g., .opus)
-  ├── video/              # Webcam recordings
-  ├── deskshare/          # Screen sharing videos
-  ├── presentation/       # Slides and presentation assets
-  └── notes/              # Shared notes (notes.etherpad, notes.html, notes.pdf)
-  ```
-
-### 3. Sanity
-- **What happens**: Validates that archived files are complete and usable
-- **Checks**: Media files have content, events were properly captured
-
-### 4. Process
-- **What happens**: Format-specific processing scripts parse events and convert media
-- **Location**: `/usr/local/bigbluebutton/core/scripts/process/<format>.rb`
-- **Output**: `/var/bigbluebutton/recording/process/<format>/<meeting_id>/`
-- **Key tasks**:
-  - Parse events.xml
-  - Extract and transform media
-  - Create metadata.xml with meeting information
-  - Mark processing complete with `.done` file
-
-### 5. Publish
-- **What happens**: Organize processed files into publicly accessible directories
-- **Location**: `/usr/local/bigbluebutton/core/scripts/publish/<format>.rb`
-- **Output**: `/var/bigbluebutton/published/<format>/<meeting_id>/`
-- **Key tasks**:
-  - Copy processed files to public directory
-  - Update metadata.xml with playback links
-  - Mark publishing complete with `.done` file
-  - Clean up process directory
-
-### 6. Playback
-- **What happens**: Published files are served via nginx and rendered in browsers
-- **Access**: `https://<server>/playback/<format>/<meeting_id>/`
-
----
-
-## Configuration System
-
-### Main Configuration
-- **File**: `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`
-- **Contains**: Directory paths, logging config, playback host/protocol
-
-### Recording Workflow
-- **File**: `/etc/bigbluebutton/recording/recording.yml`
-- **Purpose**: Defines processing pipeline and dependencies
-
-Example:
 ```yaml
 steps:
   archive: "sanity"
   sanity: "captions"
   captions:
-    - 'process:presentation'
-    - 'process:notes'
-    - 'process:video'
-  'process:presentation': 'publish:presentation'
-  'process:notes': 'publish:notes'
-  'process:video': 'publish:video'
+    - "process:presentation"
+    - "process:ai-summary"
+  "process:presentation": "publish:presentation"
+  "process:ai-summary": "publish:ai-summary"
 ```
 
-### Format-Specific Configuration
-- **File**: `/usr/local/bigbluebutton/core/scripts/<format>.yml`
-- **Purpose**: Format-specific settings
+---
 
-Example (notes.yml):
+## Components
+
+### 1. Post-Archive Hook — `transcribe_audio.rb`
+
+**Location (deployed):** `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb`
+**Trigger:** Runs after the Archive stage, before Sanity
+**Invocation:** `ruby transcribe_audio.rb -m <meeting_id>`
+
+Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `webm opus mp3 wav ogg m4a flac`) and transcribes each one.
+
+**Transcription back-end (priority order):**
+
+1. **Custom script** — if `transcribe.sh` exists alongside `transcribe_audio.rb` and is executable, it is called as:
+   ```
+   transcribe.sh <audio_file> <output_json_file>
+   ```
+   The script must produce a JSON file with a `"transcription"` array of segment objects:
+   ```json
+   [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }]
+   ```
+
+2. **whisper.cpp fallback** — the binary is located by scanning a list of known paths. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`. The `-oj` flag produces segment-level JSON output.
+
+**Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
+
+```json
+{
+  "meeting_id": "1b30d714...-1760738236204",
+  "generated_at": "2025-01-15T10:23:00Z",
+  "tracks": [
+    {
+      "file": "audio-track-name.webm",
+      "segments": [
+        { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello everyone." }
+      ]
+    }
+  ]
+}
+```
+
+If `transcription.json` already exists, the script exits immediately without re-transcribing (delete it to force a re-run).
+
+---
+
+### 2. Process Stage — `process/ai-summary.rb`
+
+**Location (deployed):** `/usr/local/bigbluebutton/core/scripts/process/ai-summary.rb`
+**Invocation:** `ruby ai-summary.rb -m <meeting_id>`
+
+**Input directory:** `recording/raw/<meeting_id>/`
+```
+raw/<meeting_id>/
+├── events.xml                      # Meeting event log
+├── notes/notes.pdf                 # Shared notes (PDF)
+├── notes/notes.html                # Shared notes (HTML, from Etherpad)
+├── audio/                          # Per-speaker audio tracks
+│   ├── <user_id>.webm
+│   └── ...
+└── transcription/
+    └── transcription.json          # Produced by post_archive hook
+```
+
+**Output directory:** `recording/process/ai-summary/<meeting_id>/`
+```
+process/ai-summary/<meeting_id>/
+├── ai-summary.pdf                  # Original notes PDF
+├── ai-summary.md                   # Rendered markdown report
+├── ai-summary.html                 # Rendered HTML report
+├── transcript.txt                  # Plain text, speaker-grouped
+├── transcript_diarized.vtt         # WebVTT with speaker labels
+├── summary.txt                     # LLM summary (if enabled)
+├── action_items.json               # LLM action items (if enabled)
+└── metadata.xml                    # state="processed"
+```
+
+#### Extractor Module
+
+All extractors live inline in `process/ai-summary.rb` under `module Extractors`.
+
+**`AttendeesExtractor`**
+- XPath: `//event[@eventname='ParticipantJoinEvent']/name`
+- Returns sorted unique array of participant names
+
+**`NotesExtractor`**
+- Reads `notes/notes.html`, strips HTML tags, counts words
+- Returns plain text content and word count
+
+**`PollsExtractor`**
+- XPath: `//event[@eventname='PollPublishedRecordEvent']`
+- Returns array of `{ id:, question:, answers: [{text:, votes:}] }`
+
+**`TranscriptExtractor`**
+- Reads `transcription.json`
+- Builds speaker-to-audio-file mapping from `AudioTrackPublishedEvent` in `events.xml`
+- Uses `BigBlueButton::Events.first_event_timestamp(events_doc)` for the recording start time
+- Converts absolute UTC timestamps to recording-relative offsets for WebVTT
+- Merges consecutive segments from the same speaker into cues, splitting when:
+  - Speaker changes
+  - Cue text exceeds `MAX_CUE_CHARS = 200`
+  - Cue duration exceeds `MAX_CUE_DURATION_MS = 15_000`
+- Long cues are further split at sentence boundaries (`.!?`) with proportional timestamp interpolation
+- Returns `{ plain: String, diarized: String }` (WebVTT)
+
+**`SummaryExtractor`**
+- Combines notes content and plain transcript
+- Calls `LLMClient::Base.create(logger).summarize(text)`
+- Returns nil when LLM is disabled or unavailable
+- Saves result to `summary.txt`
+
+**`ActionItemsExtractor`**
+- Combines summary and transcript; sends to LLM with a structured JSON prompt
+- Parses JSON response (handles markdown code fences)
+- Returns `[{ owner: String, label: String, status: :ok|:warn|:pending }]`
+- Saves raw JSON to `action_items.json`
+
+#### Helper Modules
+
+**`WebVTTParser`** — Parses a WebVTT string into `[{start:, end:, speaker:, text:}]` hashes for template use.
+
+**`MarkdownConverter`** — Converts markdown text to HTML (inline implementation, no gem dependency).
+
+---
+
+### 3. Publish Stage — `publish/ai-summary.rb`
+
+**Location (deployed):** `/usr/local/bigbluebutton/core/scripts/publish/ai-summary.rb`
+**Invocation:** `ruby ai-summary.rb -m <meeting_id>-ai-summary`
+
+The BBB framework appends `-<format>` to the meeting ID when invoking publish scripts. The script strips this suffix with `delete_suffix("-ai-summary")`.
+
+**Steps:**
+1. Early exit if not invoked with the `-ai-summary` suffix
+2. Early exit if `$publish_dir/<meeting_id>/` already exists (idempotent)
+3. Convert `ai-summary.md` → `ai-summary.pdf` via `pandoc --pdf-engine=pdflatex`; fall back to original PDF on failure
+4. Copy `metadata.xml` from process dir; update with `state="published"`, playback link, duration
+5. Add raw/playback size metadata
+6. Copy staging dir to `$publish_dir/<meeting_id>/`
+7. Remove process and staging dirs
+8. Write `.done` or `.fail` status file
+
+**Playback link format:**
+```
+https://<playback_host>/ai-summary/<meeting_id>/ai-summary.pdf
+```
+
+---
+
+### 4. LLM Client — `lib/llm_client.rb`
+
+**Location (deployed):** `/usr/local/bigbluebutton/core/lib/ai-summary/llm_client.rb`
+
+Factory: `LLMClient::Base.create(logger)` — reads config and returns the appropriate client.
+
+```
+LLMClient::Base
+├── ClaudeClient   — POST https://api.anthropic.com/v1/messages
+├── OpenAIClient   — POST https://api.openai.com/v1/chat/completions
+└── DisabledClient — returns nil
+```
+
+The config path is hardcoded to production (`/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`). The client raises an error if called from outside that directory, preventing accidental LLM calls in development.
+
+Environment variable override (takes priority over config):
+- `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY`
+
+---
+
+### 5. Templates
+
+**Location (deployed):** `/usr/local/bigbluebutton/core/playback/ai-summary/`
+
+Both templates are ERB. The process script resolves the path from `playback_dir` in `ai-summary.yml`.
+
+**`ai-summary.md.erb`** — Sections: Shared Notes, Attendees, Poll Results, Audio Transcription (speaker-labeled with timestamps), Meeting Summary, Word Count footer.
+
+**`ai-summary.html.erb`** — A standalone HTML5 page with:
+- Dark/light mode via CSS `prefers-color-scheme`
+- KPI header (attendee count, word count, transcript format)
+- Collapsible transcript via `<details>`
+- Color-coded action item pills (`ok` = green, `warn` = orange)
+- Print-optimized CSS
+- JavaScript for print, transcript toggle, smooth scroll
+
+---
+
+## Configuration Files
+
+### `ai-summary.yml`
+
+Deployed to `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`.
+
 ```yaml
-publish_dir: /var/bigbluebutton/published/notes
+publish_dir: /var/bigbluebutton/published/ai-summary
+playback_dir: /usr/local/bigbluebutton/core/playback/ai-summary
 format: pdf
+whisper_threads: 4
+```
+
+### `llm.yml`
+
+Deployed to `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`. Not committed to source control (use `llm.yml.example` as a template).
+
+```yaml
+provider: 'claude'         # 'claude', 'openai', or 'disabled'
+anthropic_api_key: '...'   # or use ANTHROPIC_API_KEY env var
+openai_api_key: '...'      # or use OPENAI_API_KEY env var
+
+claude:
+  model: 'claude-3-5-sonnet-20241022'
+  max_tokens: 1024
+  temperature: 0.7
+
+openai:
+  model: 'gpt-4o-mini'
+  max_tokens: 1024
+  temperature: 0.7
+
+system_prompt: |
+  You are summarizing a BigBlueButton meeting...
+```
+
+### `ai-summary-playback.nginx`
+
+Deployed to `/usr/share/bigbluebutton/nginx/ai-summary.nginx`. Serves the published format directory:
+
+```nginx
+location /ai-summary {
+    root /var/bigbluebutton/published;
+    index index.html index.htm;
+}
 ```
 
 ---
 
-## How the Notes Playback Works
+## Data Flow Diagram
 
-The `bbb-playback-notes` package provides a simple example of the process/publish pattern.
-
-### Package Structure
 ```
-/usr/local/bigbluebutton/core/scripts/
-├── notes.yml                    # Configuration
-├── process/notes.rb             # Processing script
-└── publish/notes.rb             # Publishing script
-
-/usr/share/bigbluebutton/nginx/
-└── notes-playback.nginx         # Nginx configuration
+events.xml ─────────────────────────┐
+notes/notes.html ────────────────┐  │
+notes/notes.pdf ──────────────┐  │  │  ┌── AttendeesExtractor
+audio/*.webm ──┐               │  │  │  ├── NotesExtractor
+               ▼               │  │  ├──┤  PollsExtractor
+         transcribe_audio.rb   │  │  │  ├── TranscriptExtractor
+               │               │  │  │  ├── SummaryExtractor (LLM)
+               ▼               │  │  │  └── ActionItemsExtractor (LLM)
+   transcription.json ─────────┴──┴──┘
+                                        │
+                                        ▼
+                               process/ai-summary.rb
+                                        │
+                      ┌─────────────────┼────────────────────┐
+                      ▼                 ▼                     ▼
+               ai-summary.md    ai-summary.html        metadata.xml
+               transcript.txt   transcript_diarized.vtt summary.txt
+                      │
+                      ▼
+               publish/ai-summary.rb
+                      │
+              pandoc (md → pdf)
+                      │
+                      ▼
+  /var/bigbluebutton/published/ai-summary/<meeting_id>/
+  ├── ai-summary.pdf
+  ├── ai-summary.md
+  ├── ai-summary.html
+  └── metadata.xml  (state=published, playback link, duration)
 ```
-
-### Process Stage (process/notes.rb)
-
-**Location**: `/usr/local/bigbluebutton/core/scripts/process/notes.rb`
-
-**Key Operations**:
-
-1. **Load configuration**:
-   ```ruby
-   props = YAML::load(File.open('../../core/scripts/bigbluebutton.yml'))
-   notes_props = YAML::load(File.open('notes.yml'))
-   format = notes_props['format']  # "pdf"
-   ```
-
-2. **Check for notes file**:
-   ```ruby
-   note_file = "#{raw_archive_dir}/notes/notes.#{format}"
-   # Early exit if no notes exist
-   ```
-
-3. **Create initial metadata.xml**:
-   ```ruby
-   target_dir = "#{recording_dir}/process/notes/#{meeting_id}"
-   # Build XML structure with Builder::XmlMarkup
-   ```
-
-4. **Copy notes file**:
-   ```ruby
-   FileUtils.cp(note_file, "#{target_dir}/notes.#{format}")
-   ```
-
-5. **Extract timing information from events.xml**:
-   ```ruby
-   @doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
-   meeting_start = @doc.xpath("//event")[0][:timestamp]
-   meeting_end = @doc.xpath("//event").last()[:timestamp]
-   ```
-
-6. **Update metadata.xml**:
-   - Add start_time and end_time
-   - Copy breakout room info from events.xml
-   - Extract participant count
-   - Add meeting metadata
-
-7. **Mark complete**:
-   ```ruby
-   process_done = File.new("#{recording_dir}/status/processed/#{meeting_id}-notes.done", "w")
-   state.content = "processed"
-   ```
-
-**Output**: `/var/bigbluebutton/recording/process/notes/<meeting_id>/`
-- `notes.pdf`
-- `metadata.xml` (with state="processed")
-
-### Publish Stage (publish/notes.rb)
-
-**Location**: `/usr/local/bigbluebutton/core/scripts/publish/notes.rb`
-
-**Key Operations**:
-
-1. **Parse meeting ID format**:
-   ```ruby
-   # Input: "<meeting_id>-<playback_format>"
-   match = /(.*)-(.*)/.match meeting_id
-   meeting_id = match[1]
-   playback = match[2]
-   ```
-
-2. **Copy processed files**:
-   ```ruby
-   target_dir = "#{recording_dir}/publish/notes/#{meeting_id}"
-   FileUtils.cp(note_file, target_dir)
-   FileUtils.cp("#{process_dir}/metadata.xml", target_dir)
-   ```
-
-3. **Update metadata.xml with playback info**:
-   ```ruby
-   xml.playback {
-     xml.format("notes")
-     xml.link("#{playback_protocol}://#{playback_host}/notes/#{meeting_id}/notes.#{format}")
-     xml.duration("#{recording_time}")
-   }
-   state.content = "published"
-   published.content = "true"
-   ```
-
-4. **Add file sizes**:
-   ```ruby
-   BigBlueButton.add_raw_size_to_metadata(target_dir, raw_dir)
-   BigBlueButton.add_playback_size_to_metadata(target_dir)
-   ```
-
-5. **Copy to public directory**:
-   ```ruby
-   publish_dir = notes_props['publish_dir']  # /var/bigbluebutton/published/notes
-   FileUtils.cp_r(target_dir, publish_dir)
-   ```
-
-6. **Cleanup and mark complete**:
-   ```ruby
-   FileUtils.rm_r(process_dir)  # Remove processed files
-   FileUtils.rm_r(target_dir)   # Remove temporary publish files
-   publish_done = File.new("#{recording_dir}/status/published/#{meeting_id}-notes.done", "w")
-   ```
-
-**Output**: `/var/bigbluebutton/published/notes/<meeting_id>/`
-- `notes.pdf`
-- `metadata.xml` (with playback link and state="published")
 
 ---
 
-## Key Patterns
+## Deployment Paths Summary
 
-### Script Structure
-All process/publish scripts follow this pattern:
+| File | Source | Deployed To |
+|---|---|---|
+| `transcribe_audio.rb` | `src/scripts/post_archive/` | `.../scripts/post_archive/` |
+| `process/ai-summary.rb` | `src/ai-summary/process/` | `.../scripts/process/` |
+| `publish/ai-summary.rb` | `src/ai-summary/publish/` | `.../scripts/publish/` |
+| `llm_client.rb` | `src/ai-summary/lib/` | `.../lib/ai-summary/` |
+| `llm.yml` | `src/ai-summary/` | `.../lib/ai-summary/` |
+| `ai-summary.md.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
+| `ai-summary.html.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
+| `ai-summary.yml` | `src/ai-summary/` | `.../scripts/ai-summary.yml` |
+| `ai-summary-playback.nginx` | `src/ai-summary/` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 
-```ruby
-# 1. Load dependencies
-require File.expand_path('../../../lib/recordandplayback', __FILE__)
-require 'optimist'
-require 'yaml'
-
-# 2. Parse command-line options
-opts = Optimist::options do
-  opt :meeting_id, "Meeting id to archive", type: String
-end
-
-# 3. Load configuration
-props = YAML::load(File.open('bigbluebutton.yml'))
-format_props = YAML::load(File.open('format.yml'))
-
-# 4. Set up directories and logging
-target_dir = "#{recording_dir}/process/format/#{meeting_id}"
-logger = Logger.new("#{log_dir}/format/process-#{meeting_id}.log")
-BigBlueButton.logger = logger
-
-# 5. Check if already processed (idempotency)
-if not FileTest.directory?(target_dir)
-  # Do processing
-end
-
-# 6. Error handling
-rescue Exception => e
-  BigBlueButton.logger.error(e.message)
-  exit 1
-end
-```
-
-### Metadata.xml Evolution
-- **Process stage**: Creates initial metadata.xml with state="processing"
-- **Process completion**: Updates state="processed", adds timing/metadata
-- **Publish stage**: Copies and updates with state="published", adds playback links
-
-### Status Files
-- `.done` files signal completion: `<meeting_id>-<format>.done`
-- `.fail` files signal errors: `<meeting_id>-<format>.fail`
-- Location: `/var/bigbluebutton/recording/status/{processed,published}/`
-
-### Events.xml Structure
-```xml
-<recording meeting_id="..." bbb_version="...">
-  <meeting id="..." name="..." />
-  <metadata meetingId="..." meetingName="..." />
-  <event timestamp="..." module="..." eventname="...">
-    <!-- Event-specific data -->
-  </event>
-  ...
-</recording>
-```
-
-Key event types:
-- `StartRecordingEvent`: Audio recording start with filename
-- `ParticipantJoinEvent`: User joins meeting
-- `PadCreatedEvent`: Shared notes pad created
-- `RecordStatusEvent`: Recording status changes
-
----
-
-## Worker Architecture
-
-Workers monitor status directories and execute scripts:
-
-```
-rap-process-worker.rb  → Monitors /status/sanity/*.done
-                        → Executes /scripts/process/<format>.rb
-                        → Creates /status/processed/*.done
-
-rap-publish-worker.rb  → Monitors /status/processed/*.done
-                        → Executes /scripts/publish/<format>.rb
-                        → Creates /status/published/*.done
-```
-
-Each worker:
-1. Polls status directory for `.done` files
-2. Reads recording.yml to determine next step
-3. Executes appropriate Ruby script
-4. Monitors for completion or failure
+All paths under `.../` are relative to `/usr/local/bigbluebutton/core`.

@@ -154,7 +154,7 @@ begin
   # Check if notes file exists
   ai_summary_file = "#{process_dir}/ai-summary.#{format}"
   unless File.exist?(ai_summary_file)
-    BigBlueButton.logger.info("There wasn't any note for #{meeting_id}")
+    BigBlueButton.logger.info("There wasn't any file in the process directory for #{meeting_id}")
     File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.done", "Published #{meeting_id}")
     exit 0
   end

@@ -1,144 +1,83 @@
-# BigBlueButton AI Playback Development
+# bbb-playback-ai — `ai-summary` Recording Format
 
-Local development environment for testing and developing BigBlueButton recording and playback scripts with AI-powered audio transcription.
+An `ai-summary` playback format for [BigBlueButton](https://bigbluebutton.org/) that enriches meeting recordings with AI-powered features: automatic audio transcription, speaker diarization, LLM-generated summaries, and action item extraction.
 
-## Features
+## What it does
 
-- **Audio Transcription**: Uses whisper.cpp to transcribe meeting audio with speaker diarization
-- **WebVTT Output**: Generates WebVTT-formatted transcripts with timestamps
-- **Smart Segmentation**: Intelligent speaker change detection to create natural conversation segments
-- **Multi-speaker Support**: Per-speaker audio track processing with accurate attribution
-- **LLM Summarization**: Optional AI-powered meeting summaries using Anthropic Claude
+After a BBB meeting is recorded, this format adds:
 
-## Quick Start
-
-```bash
-# Test a recording
-./apply.sh <meeting_id>
-
-# Clean generated files
-./clean.sh <meeting_id>
-
-# Compare with server output
-./compare.sh <meeting_id>
-```
-
-## Documentation
-
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Command cheat sheet
-- **[TEST_HARNESS.md](TEST_HARNESS.md)** - Complete usage guide
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - BBB recording system details
-- **[SUMMARY.md](SUMMARY.md)** - What was built
+- **Audio transcription** — per-speaker audio tracks are transcribed via whisper.cpp (or a custom back-end)
+- **Speaker-labeled WebVTT** — transcripts are formatted as WebVTT cues with speaker attribution and timestamps relative to recording start
+- **Shared notes** — the meeting's Etherpad notes are extracted and included
+- **Poll results** — any polls run during the meeting are captured
+- **LLM summary** — optional AI-generated meeting summary (requires API key configuration)
+- **Action items** — optional structured action item extraction via LLM
+- **HTML report** — a standalone, print-ready HTML page with dark/light mode and an embedded transcript viewer
+- **Markdown + PDF** — the report is also available as Markdown and converted to PDF via pandoc
 
 ## Project Structure
 
 ```
-├── config/          # Local configuration
-├── notes/           # Notes playback scripts
-├── recording/       # Test workspace
-│   ├── raw/        # Input recordings
-│   ├── process/    # Processed output
-│   ├── publish/    # Published output
-│   └── status/     # Status files
-├── logs/           # Processing logs
-├── apply.sh        # Run test
-├── clean.sh        # Clean output
-└── compare.sh      # Validate results
+bbb-playback-ai/
+├── src/
+│   ├── ai-summary/
+│   │   ├── process/
+│   │   │   └── ai-summary.rb          # BBB process stage script
+│   │   ├── publish/
+│   │   │   └── ai-summary.rb          # BBB publish stage script
+│   │   ├── lib/
+│   │   │   └── llm_client.rb          # Multi-provider LLM abstraction
+│   │   ├── templates/
+│   │   │   ├── ai-summary.md.erb      # Markdown output template
+│   │   │   └── ai-summary.html.erb    # HTML output template
+│   │   ├── ai-summary.yml             # Format configuration
+│   │   ├── llm.yml.example            # LLM config template (copy → llm.yml)
+│   │   └── ai-summary-playback.nginx  # Nginx location block
+│   └── scripts/
+│       └── post_archive/
+│           └── transcribe_audio.rb    # Post-archive audio transcription hook
+├── recording/                         # Test workspace (gitignored)
+│   ├── raw/                           # Raw recordings input
+│   ├── process/ai-summary/            # Process stage output
+│   ├── publish/ai-summary/            # Publish stage output
+│   └── status/                        # .done / .fail marker files
+├── logs/                              # Processing logs (gitignored)
+└── deploy.sh                          # Deploy to production BBB server
 ```
-
-## Development Workflow
-
-1. **Edit scripts** in `notes/process/` or `notes/publish/`
-2. **Clean previous run**: `./clean.sh <meeting_id>`
-3. **Test changes**: `./apply.sh <meeting_id>`
-4. **Validate**: `./compare.sh <meeting_id>`
-5. **Iterate** as needed
-
-See [TEST_HARNESS.md](TEST_HARNESS.md) for details.
-
-## Transcription Features
-
-### WebVTT Format
-
-Transcripts are generated in WebVTT format (`transcript_diarized.vtt`) with:
-- Standard WebVTT header
-- Timestamp ranges (HH:MM:SS.mmm --> HH:MM:SS.mmm)
-- Speaker attribution (Speaker: text)
-- Paragraph-level segmentation
-
-Example:
-```
-WEBVTT
-
-00:00:00.252 --> 00:00:33.732
-Calvin: I'm refactoring how the video reading is working...
-
-00:00:29.423 --> 00:00:53.333
-Fred Dixon: All right Calvin, go for it...
-```
-
-### Smart Segmentation Logic
-
-The transcription system uses intelligent segmentation to create natural conversation flows:
-
-**How it works:**
-
-1. **Per-Speaker Audio Tracks**: Each participant's audio is transcribed separately with word-level timestamps
-
-2. **Look-Ahead Detection**: When a speaker appears to change, the system looks ahead to count consecutive words:
-   - If new speaker has ≥3 consecutive words → confirmed speaker change, output segment
-   - If new speaker has <3 words → brief interjection, ignore and continue current segment
-
-3. **Special Token Filtering**: Removes whisper.cpp artifacts:
-   - `[_BEG_]`, `[_END_]`, `[_TT_*]` markers
-   - `[BLANK_AUDIO]` and fragments (BL, ANK, AUD, IO, etc.)
-   - Noise descriptions (keyboard, clicking, etc.)
-
-4. **Timestamp Alignment**: All timestamps are relative to recording start (not meeting start)
-   - Accounts for delayed recording start
-   - Uses `RecordStatusEvent` with `status=true` as time zero
-
-**Benefits:**
-- Natural paragraph-level segments instead of word-by-word fragmentation
-- Accurate speaker attribution even with simultaneous speech
-- Clean output without technical artifacts
-- Compatible with standard video players and caption systems
-
-### Output Files
-
-- `transcript.txt` - Plain text transcription (all speakers combined)
-- `transcript_diarized.vtt` - WebVTT format with speaker labels and timestamps
-- `notes.md` - Markdown summary with embedded transcript
-- `summary.txt` - AI-generated meeting summary (if LLM configured)
 
 ## Deployment
 
-### Usage
+`deploy.sh` copies all files to the correct locations on a BBB server and installs whisper.cpp. Requires root.
 
-`deploy.sh` — Deploy ai-summary recording format and post_archive scripts to BigBlueButton
-Deployment paths:
-  `src/scripts/post_archive/`  → `/usr/local/bigbluebutton/core/scripts/post_archive/`
-  `src/ai-summary/process/`           →  /usr/local/bigbluebutton/core/scripts/process/ 
-/usr/local/bigbluebutton/core/scripts/publish/
-  src/ai-summary/ai-summary.yml           → /usr/local/bigbluebutton/core/scripts/
-  src/ai-summary/ai-summary-playback.nginx → /usr/share/bigbluebutton/nginx/
-Usage:
-  ./deploy.sh [--dry-run]
+```bash
+./deploy.sh           # deploy everything
+./deploy.sh --dry-run # preview without writing
+```
 
-### After deployment
+What it deploys:
 
-After the deployment is complete, next step — wire ai-summary into the BBB recording pipeline.
-Edit `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml` and update the 'steps' block:
+| Source | Destination |
+|---|---|
+| `src/scripts/post_archive/` | `/usr/local/bigbluebutton/core/scripts/post_archive/` |
+| `src/ai-summary/process/ai-summary.rb` | `/usr/local/bigbluebutton/core/scripts/process/` |
+| `src/ai-summary/publish/ai-summary.rb` | `/usr/local/bigbluebutton/core/scripts/publish/` |
+| `src/ai-summary/lib/llm_client.rb` | `/usr/local/bigbluebutton/core/lib/ai-summary/` |
+| `src/ai-summary/llm.yml` | `/usr/local/bigbluebutton/core/lib/ai-summary/` |
+| `src/ai-summary/templates/` | `/usr/local/bigbluebutton/core/playback/ai-summary/` |
+| `src/ai-summary/ai-summary.yml` | `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` |
+| `src/ai-summary/ai-summary-playback.nginx` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 
-```yml
-  steps:
-    archive: "sanity"
-    sanity: "captions"
-    captions:
-      - "process:presentation"
-      - "process:ai-summary"
-    "process:presentation": "publish:presentation"
-    "process:ai-summary": "publish:ai-summary"
+After deployment, wire the format into the BBB recording pipeline by editing `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
+
+```yaml
+steps:
+  archive: "sanity"
+  sanity: "captions"
+  captions:
+    - "process:presentation"
+    - "process:ai-summary"
+  "process:presentation": "publish:presentation"
+  "process:ai-summary": "publish:ai-summary"
 ```
 
 Then restart the recording worker:
@@ -147,5 +86,81 @@ Then restart the recording worker:
 systemctl restart bbb-rap-resque-worker
 ```
 
-Tip: place a custom transcribe.sh in `/usr/local/bigbluebutton/core/scripts/post_archive/` to override the `whisper.cpp` fallback.
+## LLM Configuration
 
+LLM summarization is **production-only** (the client raises an error when run outside the BBB scripts directory).
+
+Copy the example config and set your provider:
+
+```bash
+cp src/ai-summary/llm.yml.example src/ai-summary/llm.yml
+```
+
+```yaml
+# src/ai-summary/llm.yml
+provider: 'claude'          # 'claude', 'openai', or 'disabled'
+anthropic_api_key: 'sk-...' # or set ANTHROPIC_API_KEY env var
+```
+
+After deployment, the config lives at `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
+
+## Custom Transcription Back-end
+
+To replace whisper.cpp with your own transcription service, drop a `transcribe.sh` script next to `transcribe_audio.rb`:
+
+```
+/usr/local/bigbluebutton/core/scripts/post_archive/transcribe.sh
+```
+
+It is called as:
+```bash
+transcribe.sh <audio_file> <output_json_file>
+```
+
+The output JSON must contain a `"transcription"` array of segment objects:
+```json
+[
+  { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello everyone." }
+]
+```
+
+## Output Files
+
+Each processed recording produces:
+
+| File | Description |
+|---|---|
+| `ai-summary.pdf` | Original notes PDF (or pandoc-converted from markdown) |
+| `ai-summary.md` | Markdown report with notes, transcript, and summary |
+| `ai-summary.html` | Standalone HTML report (dark/light mode, print-ready) |
+| `transcript.txt` | Plain text transcript, speaker-grouped |
+| `transcript_diarized.vtt` | WebVTT transcript with speaker labels and timestamps |
+| `summary.txt` | LLM-generated meeting summary (if LLM enabled) |
+| `action_items.json` | Structured action items extracted by LLM (if LLM enabled) |
+| `metadata.xml` | BBB recording metadata |
+
+## Logs
+
+```bash
+# Post-archive transcription (production)
+tail -f /var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log
+
+# Process stage
+tail -f /var/log/bigbluebutton/ai-summary/process-<meeting_id>.log
+
+# Publish stage
+tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log
+```
+
+## Dependencies
+
+- **whisper.cpp** — installed by `deploy.sh` to `/usr/local/bin/whisper.cpp`
+- **ffmpeg** — audio format conversion (for whisper.cpp)
+- **pandoc + texlive-latex** — Markdown to PDF conversion
+- **Ruby gems**: `optimist`, `builder`, `nokogiri`, `anthropic` (optional), `openai` (optional)
+
+## Further Reading
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — BBB recording pipeline and component details
+- [QUICK-GUIDE.md](QUICK-GUIDE.md) — Development workflow and quick reference
+- [BigBlueButton Recording Docs](https://docs.bigbluebutton.org/development/recording/)

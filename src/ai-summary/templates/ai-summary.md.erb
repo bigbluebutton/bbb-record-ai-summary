@@ -33,8 +33,10 @@
 <% if @transcript_diarized && !@transcript_diarized.empty? %>
 ## Audio Transcription (Speaker-Labeled)
 
-<%= @transcript_diarized %>
+<% @transcript_diarized.each do |cue| %>
+**[<%= cue[:start] %> → <%= cue[:end] %>] <%= cue[:speaker] %>:** <%= cue[:text] %>
 
+<% end %>
 ---
 
 <% elsif @transcript && !@transcript.empty? %>
