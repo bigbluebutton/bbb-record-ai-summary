@@ -620,7 +620,8 @@ module Extractors
       logger.info("Generated summary: #{summary.length} characters, saved to summary.txt")
       summary.strip
     rescue StandardError => e
-      raise "Summary generation failed: #{e.message}"
+      logger.error("Summary generation failed: #{e.message}")
+      nil
     end
   end
 
@@ -734,7 +735,7 @@ def html_to_plain_text(html_content)
 end
 
 # Helper method to render markdown using ERB template
-def render_markdown_template(template_path, data)
+def render_markdown_into_template(template_path, data)
   template_content = File.read(template_path, encoding: 'utf-8')
   erb = ERB.new(template_content, trim_mode: '-')
 
@@ -886,7 +887,7 @@ unless FileTest.directory?(target_dir)
     # Render markdown from ERB template
     BigBlueButton.logger.info("Rendering ai-summary.md from template")
     template_path = "#{playback_dir}/ai-summary.md.erb"
-    notes_md_content = render_markdown_template(template_path, md_template_data)
+    notes_md_content = render_markdown_into_template(template_path, md_template_data)
     File.write("#{target_dir}/ai-summary.md", notes_md_content)
     BigBlueButton.logger.info("Created ai-summary.md with #{word_count} words and #{attendees.length} attendees")
 
@@ -926,6 +927,7 @@ unless FileTest.directory?(target_dir)
       transcript_open: true,
       timestamps_note: "Timestamps relative to recording start.",
       shared_notes: notes_html,
+      polls: polls,
       summary: summary,
       key_points: key_points.empty? ? nil : key_points,
       action_items: action_items,
@@ -937,6 +939,13 @@ unless FileTest.directory?(target_dir)
     html_content = render_html_template(html_template_path, html_data)
     File.write("#{target_dir}/ai-summary.html", html_content)
     BigBlueButton.logger.info("Created ai-summary.html with #{attendees.length} attendees and #{transcript_cues.length} transcript cues")
+
+    # Render BlockNote-compatible JSON document - Should look like the generated markdown
+    BigBlueButton.logger.info("Rendering ai-summary.json from template")
+    json_template_path = "#{playback_dir}/ai-summary.json.erb"
+    json_content = render_markdown_into_template(json_template_path, md_template_data)
+    File.write("#{target_dir}/ai-summary.json", json_content)
+    BigBlueButton.logger.info("Created ai-summary.json")
 
     metadata = build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
 

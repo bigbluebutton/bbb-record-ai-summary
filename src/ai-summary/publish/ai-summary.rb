@@ -166,6 +166,14 @@ begin
   source_html = "#{process_dir}/ai-summary.html"
   FileUtils.cp(source_html, "#{target_dir}/ai-summary.html")
 
+  source_json = "#{process_dir}/ai-summary.json"
+  if File.exist?(source_json)
+    FileUtils.cp(source_json, "#{target_dir}/ai-summary.json")
+    logger.info("Copied ai-summary.json to publish directory")
+  else
+    logger.warn("ai-summary.json not found in process dir, skipping")
+  end
+
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
   recording_time = BigBlueButton::Events.get_recording_length(events_doc)

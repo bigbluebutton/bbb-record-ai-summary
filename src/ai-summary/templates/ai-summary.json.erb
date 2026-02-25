@@ -1,0 +1,101 @@
+<%
+require 'json'
+
+blocks = []
+
+# --- helpers ---
+
+text_node = ->(text, bold: false, italic: false) {
+  styles = {}
+  styles[:bold] = true if bold
+  styles[:italic] = true if italic
+  { type: "text", text: text.to_s, styles: styles }
+}
+
+paragraph_block = ->(*nodes) { { type: "paragraph", content: nodes.flatten } }
+heading_block   = ->(text, level) { { type: "heading", props: { level: level }, content: [text_node.(text)] } }
+bullet_block    = ->(*nodes) { { type: "bulletListItem", content: nodes.flatten } }
+divider_block   = -> { { type: "divider" } }
+
+strip_html = ->(html) { html.gsub(/<[^>]+>/, '').strip }
+
+# --- Shared Notes ---
+
+blocks << heading_block.("Shared Notes", 1)
+
+if @notes_content && !@notes_content.empty?
+  strip_html.(@notes_content).split("\n").each do |line|
+    next if line.strip.empty?
+    blocks << paragraph_block.(text_node.(line.strip))
+  end
+else
+  blocks << paragraph_block.(text_node.("(No notes content)"))
+end
+
+blocks << divider_block.()
+
+# --- Attendees ---
+
+if @attendees && !@attendees.empty?
+  blocks << heading_block.("Attendees (#{@attendees.length})", 2)
+  @attendees.each do |name|
+    blocks << bullet_block.(text_node.(name))
+  end
+  blocks << divider_block.()
+end
+
+# --- Poll Results ---
+
+if @polls && !@polls.empty?
+  blocks << heading_block.("Poll Results (#{@polls.length})", 2)
+  @polls.each_with_index do |poll, idx|
+    blocks << heading_block.("Poll #{idx + 1}: #{poll[:question]}", 3)
+    poll[:answers].each do |answer|
+      vote_label = answer[:votes] == 1 ? "vote" : "votes"
+      blocks << bullet_block.(
+        text_node.(answer[:text], bold: true),
+        text_node.(": #{answer[:votes]} #{vote_label}")
+      )
+    end
+  end
+  blocks << divider_block.()
+end
+
+# --- Audio Transcription ---
+
+if @transcript_diarized && !@transcript_diarized.empty?
+  blocks << heading_block.("Audio Transcription (Speaker-Labeled)", 2)
+  @transcript_diarized.each do |cue|
+    blocks << paragraph_block.(
+      text_node.("[#{cue[:start]} → #{cue[:end]}] #{cue[:speaker]}:", bold: true),
+      text_node.(" #{cue[:text]}")
+    )
+  end
+  blocks << divider_block.()
+elsif @transcript && !@transcript.empty?
+  blocks << heading_block.("Audio Transcription", 2)
+  @transcript.split("\n").each do |line|
+    next if line.strip.empty?
+    blocks << paragraph_block.(text_node.(line.strip))
+  end
+  blocks << divider_block.()
+end
+
+# --- Meeting Summary ---
+
+if @summary && !@summary.empty?
+  blocks << heading_block.("Meeting Summary", 2)
+  @summary.split("\n").each do |line|
+    next if line.strip.empty?
+    blocks << paragraph_block.(text_node.(line.strip))
+  end
+  blocks << divider_block.()
+end
+
+# --- Word Count ---
+
+if @word_count
+  blocks << paragraph_block.(text_node.("Word Count: #{@word_count} words", italic: true))
+end
+
+%><%= JSON.pretty_generate(blocks) %>
