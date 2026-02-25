@@ -23,10 +23,13 @@
 #   }
 #
 # Transcription back-end (in order of preference):
-#   1. Custom shell script — place a file named "transcribe.sh" in the same
-#      directory as this script.  It will be called as:
-#        transcribe.sh <audio_file> <output_json_file>
-#      The script is responsible for choosing the model / provider.
+#   1. Provider Ruby script — place a file named "transcribe.rb" in:
+#        /usr/local/bigbluebutton/core/lib/transcription/   (production)
+#        src/scripts/transcription/                          (development)
+#      It will be called as:
+#        transcribe.rb <audio_file> <output_json_file>
+#      Use deploy_transcription.sh to install the desired provider:
+#        ./deploy_transcription.sh openai_whisper
 #      Output must be a valid JSON file with at minimum a "transcription" array
 #      of segment objects: { "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }
 #
@@ -35,7 +38,7 @@
 #      found in the models/ directory next to the binary.
 #
 # BBB pipeline usage:
-#   ruby transcribe_audio.rb -m <meeting_id> [-f <format>]
+#   ruby transcribe_audio.rb -m <meeting_id>
 #
 
 require '/usr/local/bigbluebutton/core/lib/recordandplayback'
@@ -45,26 +48,19 @@ require 'json'
 require 'fileutils'
 require 'logger'
 
-# ---------------------------------------------------------------------------
 # CLI arguments
-# ---------------------------------------------------------------------------
 opts = Optimist::options do
   opt :meeting_id, 'Meeting id', type: String
-  opt :format,     'Format name calling this script', type: String, default: ''
 end
 
 meeting_id = opts[:meeting_id]
 Optimist::die :meeting_id, 'is required' if meeting_id.nil? || meeting_id.strip.empty?
 
-# ---------------------------------------------------------------------------
 # Logging
-# ---------------------------------------------------------------------------
 BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 bbb_props_path  = "#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"
 
 # Use system BBB config only when the script is actually deployed there.
-# When running from a dev checkout, fall back to the local project config
-# so we don't need root access to the production recording directory.
 if File.expand_path(__dir__) == "#{BBB_SCRIPTS_DIR}/post_archive" && File.exist?(bbb_props_path)
   bbb_props     = YAML.safe_load(File.read(bbb_props_path))
   log_dir       = bbb_props['log_dir'] || '/var/log/bigbluebutton'
@@ -91,13 +87,9 @@ def log(logger, level, msg)
   $stdout.puts "[#{prefix}] #{msg}"
 end
 
-log(logger, :info, "=== post_archive/transcribe_audio.rb started ===")
 log(logger, :info, "Meeting ID : #{meeting_id}")
-log(logger, :info, "Format     : #{opts[:format].empty? ? '(not specified)' : opts[:format]}")
 
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 raw_dir           = "#{recording_dir}/raw/#{meeting_id}"
 audio_dir         = "#{raw_dir}/audio"
 transcription_dir = "#{raw_dir}/transcription"
@@ -110,9 +102,7 @@ end
 FileUtils.mkdir_p(transcription_dir)
 log(logger, :info, "Transcription output: #{transcription_dir}")
 
-# ---------------------------------------------------------------------------
 # Discover audio files
-# ---------------------------------------------------------------------------
 AUDIO_EXTENSIONS = %w[webm opus mp3 wav ogg m4a flac].freeze
 
 audio_files = AUDIO_EXTENSIONS.flat_map do |ext|
@@ -126,15 +116,20 @@ end
 
 log(logger, :info, "Found #{audio_files.size} audio file(s): #{audio_files.map { |f| File.basename(f) }.join(', ')}")
 
-# ---------------------------------------------------------------------------
 # Locate transcription back-end
-# ---------------------------------------------------------------------------
 SCRIPT_DIR = File.expand_path(__dir__).freeze
 
-# 1. Custom user-provided shell script (same directory as this .rb file)
-CUSTOM_TRANSCRIBE_SCRIPT = File.join(SCRIPT_DIR, 'transcribe.sh').freeze
+# Transcription Ruby script — searched in the lib dir
+TRANSCRIPTION_SEARCH_DIRS = [
+  '/usr/local/bigbluebutton/core/lib/transcription',
+  File.expand_path('../../transcription', __dir__),  # dev: src/scripts/transcription/
+].freeze
 
-# 2. whisper.cpp fallback — search common paths
+TRANSCRIPTION_SCRIPT = TRANSCRIPTION_SEARCH_DIRS
+  .map  { |dir| File.join(dir, 'transcribe.rb') }
+  .find { |p|   File.executable?(p) }
+
+# Wwhisper.cpp fallback — search common paths
 WHISPER_SEARCH_PATHS = [
   # Standard deploy location (set by deploy.sh)
   '/usr/local/bin/whisper.cpp/build/bin/whisper-cli',
@@ -176,13 +171,8 @@ def find_whisper_model(logger)
   nil
 end
 
-# ---------------------------------------------------------------------------
 # Transcription helpers
-# ---------------------------------------------------------------------------
-
 # Convert any audio format to 16 kHz mono WAV required by whisper.cpp.
-# Returns the path to the WAV file (may be the original if already WAV).
-# Caller is responsible for deleting temp files.
 def convert_to_wav(audio_file, logger)
   ext = File.extname(audio_file).downcase.delete('.')
   return [audio_file, nil] if ext == 'wav'
@@ -207,7 +197,6 @@ def convert_to_wav(audio_file, logger)
 end
 
 # Run whisper.cpp directly and produce a JSON output file.
-# Returns true on success.
 def run_whisper(whisper_bin, model, audio_file, output_json, logger)
   wav_path, temp_path = convert_to_wav(audio_file, logger)
   return false if wav_path.nil?
@@ -241,11 +230,9 @@ def run_whisper(whisper_bin, model, audio_file, output_json, logger)
   result
 end
 
-# Run the custom transcribe.sh with interface:
-#   transcribe.sh <audio_file> <output_json_file>
-# Returns true on success.
+# Run the transcription Ruby script with interface
 def run_custom_script(script, audio_file, output_json, logger)
-  log(logger, :info, "Running custom transcribe.sh: #{File.basename(audio_file)}")
+  log(logger, :info, "Running #{File.basename(script)}: #{File.basename(audio_file)}")
   ok = system(script, audio_file, output_json)
 
   if ok && File.exist?(output_json)
@@ -257,13 +244,11 @@ def run_custom_script(script, audio_file, output_json, logger)
   end
 end
 
-# ---------------------------------------------------------------------------
 # Decide which back-end to use
-# ---------------------------------------------------------------------------
-use_custom = File.executable?(CUSTOM_TRANSCRIBE_SCRIPT)
+use_custom = !TRANSCRIPTION_SCRIPT.nil?
 
 if use_custom
-  log(logger, :info, "Back-end: custom script (#{CUSTOM_TRANSCRIBE_SCRIPT})")
+  log(logger, :info, "Back-end: #{TRANSCRIPTION_SCRIPT}")
 else
   log(logger, :info, "Back-end: whisper.cpp (built-in fallback)")
   whisper_bin   = find_whisper_binary
@@ -271,7 +256,7 @@ else
 
   if whisper_bin.nil?
     log(logger, :error, "whisper.cpp binary not found. Searched: #{WHISPER_SEARCH_PATHS.join(', ')}")
-    log(logger, :error, "Install whisper.cpp or place a custom transcribe.sh next to this script.")
+    log(logger, :error, "Install whisper.cpp or place a transcribe.rb in one of: #{TRANSCRIPTION_SEARCH_DIRS.join(', ')}")
     exit 1
   end
 
@@ -284,9 +269,7 @@ else
   log(logger, :info, "Model  : #{whisper_model}")
 end
 
-# ---------------------------------------------------------------------------
 # Transcribe each audio file into a temp JSON, then merge into one output
-# ---------------------------------------------------------------------------
 OUTPUT_JSON = File.join(transcription_dir, 'transcription.json').freeze
 
 if File.exist?(OUTPUT_JSON)
@@ -303,7 +286,7 @@ audio_files.each do |audio_file|
   temp_files << temp_json
 
   success = if use_custom
-              run_custom_script(CUSTOM_TRANSCRIBE_SCRIPT, audio_file, temp_json, logger)
+              run_custom_script(TRANSCRIPTION_SCRIPT, audio_file, temp_json, logger)
             else
               run_whisper(whisper_bin, whisper_model, audio_file, temp_json, logger)
             end
@@ -329,9 +312,7 @@ audio_files.each do |audio_file|
   end
 end
 
-# ---------------------------------------------------------------------------
 # Merge into transcription.json and clean up temp files
-# ---------------------------------------------------------------------------
 merged = {
   'meeting_id'    => meeting_id,
   'generated_at'  => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -343,9 +324,7 @@ log(logger, :info, "Written: #{OUTPUT_JSON}")
 
 temp_files.each { |f| File.delete(f) if File.exist?(f) }
 
-# ---------------------------------------------------------------------------
 # Summary
-# ---------------------------------------------------------------------------
 ok_count     = track_results.count { |r| r[:ok] }
 failed_count = track_results.count { |r| !r[:ok] }
 total_segments = track_results.sum { |r| r[:segments].size }
@@ -357,6 +336,11 @@ log(logger, :info, "  Output           : #{OUTPUT_JSON}")
 
 track_results.reject { |r| r[:ok] }.each do |r|
   log(logger, :warn, "  FAILED: #{r[:file]}")
+end
+
+if failed_count > 0
+  File.delete(OUTPUT_JSON) if File.exist?(OUTPUT_JSON)
+  log(logger, :warn, "  Output file deleted — fix the errors and re-run to retry")
 end
 
 exit(failed_count.zero? ? 0 : 1)

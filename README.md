@@ -36,13 +36,122 @@ bbb-playback-ai/
 │   └── scripts/
 │       └── post_archive/
 │           └── transcribe_audio.rb    # Post-archive audio transcription hook
+│   └── scripts/
+│       ├── post_archive/
+│       │   └── transcribe_audio.rb    # Post-archive audio transcription hook
+│       └── transcription/             # Provider scripts (deploy one as transcribe.rb)
+│           └── openai_whisper.rb      # OpenAI Whisper API provider
 ├── recording/                         # Test workspace (gitignored)
 │   ├── raw/                           # Raw recordings input
 │   ├── process/ai-summary/            # Process stage output
 │   ├── publish/ai-summary/            # Publish stage output
 │   └── status/                        # .done / .fail marker files
 ├── logs/                              # Processing logs (gitignored)
-└── deploy.sh                          # Deploy to production BBB server
+├── deploy.sh                          # Deploy to production BBB server
+└── deploy_transcription.sh            # Deploy a transcription provider
+```
+
+## Transcription
+
+Audio transcription runs as a **post-archive hook** immediately after BBB archives a meeting. It processes every audio track found in `recording/raw/<meeting_id>/audio/` and writes a single merged output file:
+
+```
+recording/raw/<meeting_id>/transcription/transcription.json
+```
+
+If `transcription.json` already exists the script exits immediately — delete it to force a re-run.
+
+### Back-ends
+
+`transcribe_audio.rb` selects a back-end in this order:
+
+| Priority | Back-end | Active when |
+|---|---|---|
+| 1 | **Provider script** | `transcribe.rb` exists in the transcription lib dir (see below) |
+| 2 | **whisper.cpp** | Built-in fallback, installed by `deploy.sh` |
+
+### Built-in whisper.cpp fallback
+
+`deploy.sh` installs whisper.cpp to `/usr/local/bin/whisper.cpp` and downloads the `base.en` model. No extra configuration is needed — it is used automatically when no provider script is deployed.
+
+### Provider scripts
+
+Provider scripts live in `src/scripts/transcription/`. Each script is a self-contained Ruby file that is deployed as `transcribe.rb` in the transcription lib dir on the server. Only one provider is active at a time.
+
+**Available providers:**
+
+| File | Provider | Notes |
+|---|---|---|
+| `openai_whisper.rb` | OpenAI Whisper API (`whisper-1`) | Requires an OpenAI project with audio access |
+
+**Deploying a provider:**
+
+```bash
+./deploy_transcription.sh openai_whisper   # deploy the OpenAI Whisper provider
+./deploy_transcription.sh openai_whisper --dry-run  # preview without writing
+```
+
+This copies `src/scripts/transcription/openai_whisper.rb` to:
+
+```
+/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
+```
+
+and makes it executable. To revert to the whisper.cpp fallback, remove that file:
+
+```bash
+sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
+```
+
+**Testing a provider directly against a single audio file:**
+
+```bash
+sudo ruby /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb \
+  /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
+  /tmp/test_transcription.json
+```
+
+### Writing a custom provider
+
+A provider script must:
+
+1. Accept two positional arguments: `<audio_file>` and `<output_json_file>`
+2. Write a JSON file at `<output_json_file>` with this structure:
+
+```json
+{
+  "transcription": [
+    { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello everyone." }
+  ]
+}
+```
+
+Timestamps (`from` / `to`) are in **milliseconds**. Place the script in `src/scripts/transcription/<name>.rb` and deploy it with `deploy_transcription.sh <name>`.
+
+### API key configuration
+
+Provider scripts read the OpenAI API key from (in priority order):
+
+1. `OPENAI_API_KEY` environment variable
+2. `openai_api_key` field in `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`
+
+### Output format
+
+`transcription.json` merges all tracks into one file:
+
+```json
+{
+  "meeting_id": "...",
+  "generated_at": "2025-01-01T12:00:00Z",
+  "tracks": [
+    {
+      "file": "microphone-<user>-<track>.webm",
+      "segments": [
+        { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello everyone." }
+      ]
+    }
+  ]
+}
 ```
 
 ## Deployment
@@ -103,26 +212,6 @@ anthropic_api_key: 'sk-...' # or set ANTHROPIC_API_KEY env var
 ```
 
 After deployment, the config lives at `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
-
-## Custom Transcription Back-end
-
-To replace whisper.cpp with your own transcription service, drop a `transcribe.sh` script next to `transcribe_audio.rb`:
-
-```
-/usr/local/bigbluebutton/core/scripts/post_archive/transcribe.sh
-```
-
-It is called as:
-```bash
-transcribe.sh <audio_file> <output_json_file>
-```
-
-The output JSON must contain a `"transcription"` array of segment objects:
-```json
-[
-  { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello everyone." }
-]
-```
 
 ## Output Files
 
