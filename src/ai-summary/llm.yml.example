@@ -21,18 +21,22 @@ claude:
 
 # OpenAI Configuration
 openai:
-  model: 'gpt-4o-mini'  # or 'gpt-4o' for better quality
-  max_tokens: 1024
-  temperature: 0.7
+  model: 'o4-mini'  # or 'gpt-4o' for better quality
+  # max_tokens: 1024 # - o4-mini doesn't expect these parameters
+  # temperature: 0.7 # - make sure the model chosen fits the parameters
 
 # System prompt for summarization
 system_prompt: |
   You are summarizing a BigBlueButton meeting. You will receive the shared notes
-  and audio transcript from the meeting. Create a concise summary that includes:
+  and audio transcript from the meeting.
+
+  Create a concise summary that includes:
 
   1. Main topics discussed
   2. Key decisions made
   3. Action items (if any)
   4. Important points raised
+
+  Write the summary in the same language as the transcript. Do not translate it.
 
   Keep the summary clear, professional, and under 500 words.

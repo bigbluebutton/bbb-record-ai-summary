@@ -15,7 +15,7 @@
 #   OPENAI_API_KEY
 #
 # Optional environment variables:
-#   OPENAI_LANGUAGE — BCP-47 language code (default: en)
+#   OPENAI_LANGUAGE — BCP-47 language code (e.g. "pt", "es"); omit for auto-detection
 #
 # OpenAI Whisper API file size limit: 25 MB.
 #
@@ -88,7 +88,8 @@ end
 die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai_api_key in llm.yml' \
   if api_key.nil? || api_key.strip.empty?
 
-language = ENV.fetch('OPENAI_LANGUAGE', 'en')
+language = ENV['OPENAI_LANGUAGE'].to_s.strip
+language = nil if language.empty?
 
 # ---------------------------------------------------------------------------
 # File size guard — OpenAI hard limit is 25 MB
@@ -111,9 +112,9 @@ info "Transcribing #{File.basename(audio_file)} (#{(file_size / 1024.0).round(1)
 boundary = "----OpenAIBoundary#{SecureRandom.hex(16)}"
 
 body_parts = []
-body_parts << text_field(boundary, 'model',                     MODEL)
-body_parts << text_field(boundary, 'language',                  language)
-body_parts << text_field(boundary, 'response_format',           'verbose_json')
+body_parts << text_field(boundary, 'model',          MODEL)
+body_parts << text_field(boundary, 'language',       language) if language
+body_parts << text_field(boundary, 'response_format', 'verbose_json')
 body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
 body_parts << "--#{boundary}\r\n" \
               "Content-Disposition: form-data; name=\"file\"; " \

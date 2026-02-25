@@ -114,7 +114,7 @@ class WhisperBackend
       @binary,
       '-m', @model,
       '-f', wav_path,
-      '-l', 'en',
+      '-l', 'auto',
       '-oj',                 # segment-level JSON
       '-of', output_prefix,  # whisper appends .json automatically
       [:out, :err] => '/dev/null'

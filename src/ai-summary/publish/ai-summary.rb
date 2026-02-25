@@ -50,7 +50,7 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_
   logger.info("Source: #{source_md}")
   logger.info("Output: #{output_pdf}")
 
-  pandoc_cmd = "pandoc '#{source_md}' -o '#{output_pdf}' --pdf-engine=pdflatex 2>&1"
+  pandoc_cmd = "pandoc '#{source_md}' -o '#{output_pdf}' --pdf-engine=xelatex 2>&1"
   result = `#{pandoc_cmd}`
 
   if $?.success? && File.exist?(output_pdf)
