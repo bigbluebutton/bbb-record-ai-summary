@@ -2,4 +2,4 @@
 
 OPTS="--vendor BigBlueButton -m ffdixon@bigbluebutton.org --url https://bigbluebutton.org/"
 
-OPTS="$OPTS -t deb -d bbb-record-core"
+OPTS="$OPTS -t deb -d bbb-record-core -d pandoc -d texlive-latex-base"
