@@ -123,6 +123,7 @@ cp "$FORMAT_SRC/llm.yml" "$BBB_LIB/ai-summary"
 
 # Copy template files to correct place
 # /usr/local/bigbluebutton/core/playback/ai-summary
+# Includes: ai-summary.md.erb, ai-summary.html.erb, ai-summary.json.erb
 mkdir -p "$BBB_CORE/playback/ai-summary"
 
 cp -r "$FORMAT_SRC/templates/." "$BBB_CORE/playback/ai-summary"
