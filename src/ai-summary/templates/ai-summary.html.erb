@@ -84,6 +84,9 @@
     <nav class="toc" aria-label="Contents">
       <a href="#shared-notes">Shared Notes</a>
       <a href="#attendees">Attendees</a>
+      <% if @polls && !@polls.empty? %>
+      <a href="#polls">Poll Results</a>
+      <% end %>
       <a href="#transcript">Audio Transcript</a>
       <% if @summary && !@summary.empty? %>
       <a href="#summary">Meeting Summary</a>
@@ -115,6 +118,20 @@
       <% end %>
     </section>
 
+    <% if @polls && !@polls.empty? %>
+    <section id="polls" aria-labelledby="polls-h">
+      <h2 id="polls-h">Poll Results <span class="pill"><%= @polls.length %></span></h2>
+      <% @polls.each_with_index do |poll, idx| %>
+        <h3 style="margin:.6em 0 .3em">Poll <%= idx + 1 %><% if poll[:question] && !poll[:question].empty? %>: <%= poll[:question] %><% end %></h3>
+        <ul>
+          <% (poll[:answers] || []).each do |answer| %>
+            <li><strong><%= answer[:text] %></strong> — <%= answer[:votes] %> <%= answer[:votes] == 1 ? 'vote' : 'votes' %></li>
+          <% end %>
+        </ul>
+      <% end %>
+    </section>
+    <% end %>
+
     <section id="transcript" aria-labelledby="transcript-h">
       <h2 id="transcript-h">Audio Transcription <span class="pill"><%= @vtt_label || "WEBVTT" %></span></h2>
       <% if @transcript && !@transcript.empty? %>
@@ -136,13 +153,8 @@
     <% if @summary && !@summary.empty? %>
       <section id="summary" aria-labelledby="summary-h">
         <h2 id="summary-h">Meeting Summary</h2>
-        <% if @key_points && !@key_points.empty? %>
-          <h3 style="margin:.2em 0">Key Points</h3>
-          <ol>
-            <% @key_points.each do |pt| %>
-              <li><%= pt %></li>
-            <% end %>
-          </ol>
+        <% if @summary_html && !@summary_html.empty? %>
+          <%= @summary_html %>
         <% else %>
           <div style="white-space: pre-wrap;"><%= @summary %></div>
         <% end %>

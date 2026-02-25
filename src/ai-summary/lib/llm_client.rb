@@ -28,23 +28,28 @@ module LLMClient
 
       config = YAML.load_file(llm_config_path)
       provider = config['provider']
+      logger.info("LLM provider: #{provider}")
 
       case provider
       when 'claude'
-        ClaudeClient.new(config)
+        ClaudeClient.new(config, logger)
       when 'openai'
-        OpenAIClient.new(config)
+        OpenAIClient.new(config, logger)
       when 'disabled'
         logger.info("LLM summary is disabled")
-        DisabledClient.new(config)
+        DisabledClient.new(config, logger)
       else
         raise "Unknown LLM provider: #{provider}. Use 'claude', 'openai', or 'disabled'"
       end
     end
 
-    def initialize(config)
+    def initialize(config, logger)
       @config = config
+      @logger = logger
       @provider_config = config[@config['provider']] || {}
+      if @provider_config.empty?
+        @logger.warn("No '#{@config['provider']}:' section found in llm.yml — provider-specific settings (model, max_tokens, temperature) will use hardcoded defaults")
+      end
     end
 
     def summarize(text)
@@ -67,8 +72,9 @@ module LLMClient
   class ClaudeClient < Base
     API_URL = 'https://api.anthropic.com/v1/messages'.freeze
     API_VERSION = '2023-06-01'.freeze
+    DEFAULT_MODEL = 'claude-3-5-sonnet-20241022'.freeze
 
-    def initialize(config)
+    def initialize(config, logger)
       super
       @api_key = ENV['ANTHROPIC_API_KEY'] || @config['anthropic_api_key']
 
@@ -78,8 +84,10 @@ module LLMClient
     end
 
     def summarize(text)
+      model = @provider_config['model'] || DEFAULT_MODEL
+      @logger.info("Claude model: #{model}")
       body = {
-        model: @provider_config['model'] || 'claude-3-5-sonnet-20241022',
+        model: model,
         max_tokens: @provider_config['max_tokens'] || 1024,
         temperature: @provider_config['temperature'] || 0.7,
         system: system_prompt,
@@ -106,8 +114,9 @@ module LLMClient
 
   class OpenAIClient < Base
     API_URL = 'https://api.openai.com/v1/chat/completions'.freeze
+    DEFAULT_MODEL = 'gpt-4o-mini'.freeze
 
-    def initialize(config)
+    def initialize(config, logger)
       super
       @api_key = ENV['OPENAI_API_KEY'] || @config['openai_api_key']
 
@@ -117,15 +126,18 @@ module LLMClient
     end
 
     def summarize(text)
+      model = @provider_config['model'] || DEFAULT_MODEL
+      @logger.info("OpenAI model: #{model}")
       body = {
-        model: @provider_config['model'] || 'gpt-4o-mini',
-        max_tokens: @provider_config['max_tokens'] || 1024,
-        temperature: @provider_config['temperature'] || 0.7,
+        model: model,
         messages: [
           { role: 'system', content: system_prompt },
           { role: 'user', content: text }
         ]
       }
+
+      body[:max_tokens] = @provider_config['max_tokens'] unless @provider_config['max_tokens'].nil?
+      body[:temperature] = @provider_config['temperature'] unless @provider_config['temperature'].nil?
 
       uri = URI(API_URL)
       request = Net::HTTP::Post.new(uri)
