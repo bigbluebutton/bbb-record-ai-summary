@@ -345,7 +345,7 @@ module Extractors
       audio_tracks    = {}
 
       if events_doc
-        recording_start = BigBlueButton::Events.first_event_timestamp(events_doc)
+        recording_start = extract_recording_start_time(events_doc, logger)
         audio_tracks    = extract_audio_track_mappings(events_doc, logger)
       end
 
@@ -541,20 +541,35 @@ module Extractors
       lines.join("\n")
     end
 
-    # Extract recording start time from RecordStatusEvent (status=true)
+    # Extract recording start time as absolute UTC ms (consistent with AudioTrackPublishedEvent).
+    # Tries RecordStatusEvent first, then falls back to the first event that carries timestampUTC.
     def self.extract_recording_start_time(events_doc, logger)
-      event = events_doc.xpath("//event[@eventname='RecordStatusEvent']").find do |e|
+      # Preferred: explicit recording-start marker
+      record_event = events_doc.xpath("//event[@eventname='RecordStatusEvent']").find do |e|
         e.xpath('status').text.strip == 'true'
       end
 
-      if event
-        ts = event.xpath('timestampUTC').text.to_i
-        logger.info("Recording start timestampUTC: #{ts}")
-        ts
-      else
-        logger.warn("No RecordStatusEvent with status=true found")
-        nil
+      if record_event
+        ts = record_event.xpath('timestampUTC').text.to_i
+        if ts > 0
+          logger.info("Recording start from RecordStatusEvent timestampUTC: #{ts}")
+          return ts
+        end
       end
+
+      # Fallback: first event in events.xml that has a timestampUTC child element.
+      # NOTE: the `timestamp` attribute on events is ms since the BBB server started
+      # (not Unix epoch), so we must use timestampUTC for a consistent time reference.
+      events_doc.xpath("//event").each do |e|
+        ts = e.at_xpath('timestampUTC')&.text.to_i
+        if ts && ts > 0
+          logger.info("Recording start from first event with timestampUTC: #{ts}")
+          return ts
+        end
+      end
+
+      logger.warn("Could not determine recording start from timestampUTC in events.xml")
+      nil
     end
 
     # Build hash: audio_file_basename => { user_id:, name:, timestamp_utc: }

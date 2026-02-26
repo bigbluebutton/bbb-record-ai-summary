@@ -116,6 +116,7 @@ body_parts << text_field(boundary, 'model',          MODEL)
 body_parts << text_field(boundary, 'language',       language) if language
 body_parts << text_field(boundary, 'response_format', 'verbose_json')
 body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
+body_parts << text_field(boundary, 'timestamp_granularities[]', 'word')
 body_parts << "--#{boundary}\r\n" \
               "Content-Disposition: form-data; name=\"file\"; " \
               "filename=\"#{File.basename(audio_file)}\"\r\n" \
@@ -168,6 +169,16 @@ end
 segments = (data['segments'] || []).filter_map do |seg|
   text = seg['text'].to_s.strip
   next if text.empty?
+
+  no_speech_prob    = seg['no_speech_prob'].to_f
+  compression_ratio = seg['compression_ratio'].to_f
+
+
+  quality_score =
+    (1 - no_speech_prob) * 0.6 +
+    (1.0 / compression_ratio) * 0.4
+
+  next if quality_score < 0.4
 
   {
     'offsets' => {
