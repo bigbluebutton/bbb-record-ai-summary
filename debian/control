@@ -1,0 +1,15 @@
+Source: bbb-playback-ai-summary
+Section: web
+Priority: extra
+Maintainer: BigBlueButton <ffdixon@bigbluebutton.org>
+Build-Depends: debhelper (>= 13)
+Standards-Version: 4.1.4
+Homepage: https://bigbluebutton.org/
+
+Package: bbb-playback-ai-summary
+Architecture: all
+Depends: ${misc:Depends}, bbb-record-core, pandoc, texlive-latex-base
+Description: BigBlueButton AI summary recording format
+ Adds AI-powered features to BBB recordings: audio transcription,
+ speaker-labeled WebVTT output, LLM-generated meeting summaries,
+ and action item extraction.
