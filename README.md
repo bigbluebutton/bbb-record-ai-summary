@@ -31,8 +31,7 @@ bbb-playback-ai/
 │   │   │   ├── ai-summary.md.erb      # Markdown output template
 │   │   │   └── ai-summary.html.erb    # HTML output template
 │   │   ├── ai-summary.yml             # Format configuration
-│   │   ├── llm.yml.example            # LLM config template (copy → llm.yml)
-│   │   └── ai-summary-playback.nginx  # Nginx location block
+│   │   └── llm.yml.example            # LLM config template (copy → llm.yml)
 │   └── scripts/
 │       └── post_archive/
 │           └── transcribe_audio.rb    # Post-archive audio transcription hook
@@ -41,6 +40,7 @@ bbb-playback-ai/
 │       │   └── transcribe_audio.rb    # Post-archive audio transcription hook
 │       └── transcription/             # Provider scripts (deploy one as transcribe.rb)
 │           └── openai_whisper.rb      # OpenAI Whisper API provider
+├── ai-summary-playback.nginx          # Nginx location block
 ├── recording/                         # Test workspace (gitignored)
 │   ├── raw/                           # Raw recordings input
 │   ├── process/ai-summary/            # Process stage output
@@ -174,7 +174,7 @@ What it deploys:
 | `src/ai-summary/llm.yml` | `/usr/local/bigbluebutton/core/lib/ai-summary/` |
 | `src/ai-summary/templates/` | `/usr/local/bigbluebutton/core/playback/ai-summary/` |
 | `src/ai-summary/ai-summary.yml` | `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` |
-| `src/ai-summary/ai-summary-playback.nginx` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
+| `ai-summary-playback.nginx` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 
 After deployment, wire the format into the BBB recording pipeline by editing `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
 

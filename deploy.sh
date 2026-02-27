@@ -169,7 +169,7 @@ cp "$FORMAT_SRC/ai-summary.yml" "$BBB_SCRIPTS/ai-summary.yml"
 
 # Install nginx location block
 mkdir -p "$NGINX_DIR"
-cp "$FORMAT_SRC/ai-summary-playback.nginx" "$NGINX_DIR/ai-summary.nginx"
+cp "$PROJECT_ROOT/ai-summary-playback.nginx" "$NGINX_DIR/ai-summary.nginx"
 
 # Reload nginx to pick up the new location block
 if nginx -t 2>/dev/null; then

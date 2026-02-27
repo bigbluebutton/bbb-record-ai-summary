@@ -332,6 +332,6 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
 | `ai-summary.md.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
 | `ai-summary.html.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
 | `ai-summary.yml` | `src/ai-summary/` | `.../scripts/ai-summary.yml` |
-| `ai-summary-playback.nginx` | `src/ai-summary/` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
+| `ai-summary-playback.nginx` | project root | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 
 All paths under `.../` are relative to `/usr/local/bigbluebutton/core`.

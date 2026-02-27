@@ -22,11 +22,11 @@ bbb-playback-ai/
 │   │   │   └── ai-summary.html.erb     # HTML output template
 │   │   ├── ai-summary.yml              # Format config (publish_dir, playback_dir, format)
 │   │   ├── llm.yml                     # LLM config — gitignored in production
-│   │   ├── llm.yml.example             # Template for llm.yml
-│   │   └── ai-summary-playback.nginx   # Nginx location block
+│   │   └── llm.yml.example             # Template for llm.yml
 │   └── scripts/
 │       └── post_archive/
 │           └── transcribe_audio.rb     # Post-archive audio transcription hook
+├── ai-summary-playback.nginx           # Nginx location block
 ├── recording/                          # Test workspace (gitignored)
 ├── logs/                               # Processing logs (gitignored)
 └── deploy.sh                           # Deploys to production BBB (requires root)
