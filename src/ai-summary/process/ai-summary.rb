@@ -26,6 +26,7 @@ require 'rubygems'
 require 'optimist'
 require 'yaml'
 require 'json'
+require 'set'
 require 'erb'
 
 require File.expand_path('../../../lib/ai-summary/llm_client.rb', __FILE__)
@@ -284,13 +285,14 @@ module Extractors
   class PollsExtractor
     def self.extract(events_doc, logger)
       polls = []
+      published_poll_ids = Set.new
 
-      # Extract poll published events
+      # Primary: PollPublishedRecordEvent (moderator explicitly closed the poll)
       events_doc.xpath("//event[@eventname='PollPublishedRecordEvent']").each do |event|
         poll_id = event.at_xpath("pollId")&.text
         question = event.at_xpath("question")&.text
+        next unless question
 
-        # Parse answers
         answers = []
         event.xpath(".//answer").each do |answer|
           answers << {
@@ -299,10 +301,44 @@ module Extractors
           }
         end
 
-        polls << { id: poll_id, question: question, answers: answers } if question
+        polls << { id: poll_id, question: question, answers: answers }
+        published_poll_ids << poll_id
       end
 
-      logger.info("Extracted #{polls.length} polls")
+      # Fallback: reconstruct polls that were started but never explicitly published
+      # (e.g. meeting ended while poll was still open)
+      started_polls = {}
+      events_doc.xpath("//event[@eventname='PollStartedRecordEvent']").each do |event|
+        poll_id = event.at_xpath("pollId")&.text
+        next if poll_id.nil? || published_poll_ids.include?(poll_id)
+
+        question = event.at_xpath("question")&.text
+        next unless question
+
+        # Answers are stored as a JSON array: [{"id":0,"key":"Margerita"}, ...]
+        raw_answers = event.at_xpath("answers")&.text
+        answer_defs = JSON.parse(raw_answers).each_with_object({}) do |a, h|
+          h[a["id"]] = { text: a["key"], votes: 0 }
+        end rescue {}
+
+        started_polls[poll_id] = { question: question, answers: answer_defs }
+      end
+
+      events_doc.xpath("//event[@eventname='UserRespondedToPollRecordEvent']").each do |event|
+        poll_id = event.at_xpath("pollId")&.text
+        answer_id = event.at_xpath("answerId")&.text&.to_i
+        next unless started_polls.key?(poll_id)
+        next unless started_polls[poll_id][:answers].key?(answer_id)
+
+        started_polls[poll_id][:answers][answer_id][:votes] += 1
+      end
+
+      started_polls.each do |poll_id, data|
+        answers = data[:answers].sort_by { |id, _| id }.map { |_, a| a }
+        polls << { id: poll_id, question: data[:question], answers: answers }
+      end
+
+      logger.info("Extracted #{polls.length} polls (#{published_poll_ids.size} published, #{started_polls.size} reconstructed)")
       polls.any? ? polls : nil
     end
   end
@@ -603,11 +639,23 @@ module Extractors
   end
 
   class SummaryExtractor
-    def self.extract(notes_content, transcript, target_dir, logger)
+    def self.polls_to_text(polls)
+      return nil if polls.nil? || polls.empty?
+
+      lines = polls.each_with_index.map do |poll, i|
+        answers = poll[:answers].map { |a| "  - #{a[:text]}: #{a[:votes]} vote(s)" }.join("\n")
+        "Poll #{i + 1}: #{poll[:question]}\n#{answers}"
+      end
+      lines.join("\n\n")
+    end
+
+    def self.extract(notes_content, transcript, target_dir, logger, polls: nil)
       # Build structured prompt with clear section labels
       sections = []
       sections << "SHARED NOTES:\n#{notes_content}" if notes_content && !notes_content.empty?
       sections << "AUDIO TRANSCRIPT:\n#{transcript}" if transcript && !transcript.empty?
+      polls_text = polls_to_text(polls)
+      sections << "POLL RESULTS:\n#{polls_text}" if polls_text
       combined_text = sections.join("\n\n")
 
       return nil if combined_text.empty?
@@ -641,11 +689,13 @@ module Extractors
   end
 
   class ActionItemsExtractor
-    def self.extract(summary, transcript, target_dir, logger)
+    def self.extract(summary, transcript, target_dir, logger, polls: nil)
       # Build input for LLM
       sections = []
       sections << "MEETING SUMMARY:\n#{summary}" if summary && !summary.empty?
       sections << "TRANSCRIPT:\n#{transcript}" if transcript && !transcript.empty?
+      polls_text = SummaryExtractor.polls_to_text(polls)
+      sections << "POLL RESULTS:\n#{polls_text}" if polls_text
       combined_text = sections.join("\n\n")
 
       # Return empty array if no content
@@ -886,7 +936,7 @@ unless FileTest.directory?(target_dir)
 
     transcript_cues = WebVTTParser.parse(transcript_diarized)
 
-    summary = Extractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger)
+    summary = Extractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger, polls: polls)
 
     # Collect all data for template
     md_template_data = {
@@ -911,7 +961,7 @@ unless FileTest.directory?(target_dir)
 
     # Extract action items using LLM
     action_items = Extractors::ActionItemsExtractor.extract(
-      summary, transcript_plain, target_dir, BigBlueButton.logger
+      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls
     )
 
     # Convert notes content to HTML
