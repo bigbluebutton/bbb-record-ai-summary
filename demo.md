@@ -63,3 +63,9 @@ ID of an existing Docs document (with sharing settings enabled and `editing` all
 With these parameters, the service automatically creates a sub-document under the given Docs document containing the meeting summary.
 
 <img width="400" src="https://github.com/user-attachments/assets/b66ccb3e-9376-47e1-a364-72c8ec53fbe0" />
+
+## Demo
+
+
+https://github.com/user-attachments/assets/cde51277-42a8-40ef-809e-96252b37f2dd
+
