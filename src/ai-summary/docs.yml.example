@@ -7,7 +7,10 @@ enabled: true
 docs_host: https://docs.example.com
 
 # Keycloak OIDC settings (client_credentials grant)
-keycloak_host: id.bbb.imdt.dev
+# First enable **Service Account Roles** in Keycloak client (under Clients -> Docs client -> Settings -> Capability config -> Authentication flow)
+keycloak_host: id.example.com
 realm: docs
 client_id: docs
 client_secret: CHANGE_ME_OIDC_CLIENT_SECRET
+
+
