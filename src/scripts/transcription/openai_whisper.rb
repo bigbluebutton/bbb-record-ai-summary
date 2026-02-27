@@ -11,10 +11,11 @@
 # Called by transcribe_audio.rb as:
 #   transcribe.rb <audio_file> <output_json_file>
 #
-# Required environment variable:
-#   OPENAI_API_KEY
+# Config file (same directory as this script):
+#   transcription.yml — must contain openai_api_key
 #
-# Optional environment variables:
+# Optional: set OPENAI_API_KEY env var to override the config file value.
+# Optional env variables:
 #   OPENAI_LANGUAGE — BCP-47 language code (e.g. "pt", "es"); omit for auto-detection
 #
 # OpenAI Whisper API file size limit: 25 MB.
@@ -68,24 +69,20 @@ die "Usage: openai_whisper.rb <audio_file> <output_json_file>" \
 
 die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
 
-# Resolve API key: env var takes priority, then llm.yml (production path first).
-LLM_YML_SEARCH_PATHS = [
-  '/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml',
-  File.expand_path('../../ai-summary/llm.yml', __dir__),  # dev: src/ai-summary/llm.yml
-].freeze
+# Resolve API key: env var takes priority, then transcription.yml in the same directory.
+TRANSCRIPTION_YML = File.join(__dir__, 'transcription.yml').freeze
 
 api_key = ENV['OPENAI_API_KEY']
 
 if api_key.nil? || api_key.strip.empty?
-  llm_yml_path = LLM_YML_SEARCH_PATHS.find { |p| File.exist?(p) }
-  if llm_yml_path
-    llm_config = YAML.safe_load(File.read(llm_yml_path)) rescue {}
-    api_key = llm_config['openai_api_key'].to_s.strip
-    info "Using API key from #{llm_yml_path}" unless api_key.empty?
+  if File.exist?(TRANSCRIPTION_YML)
+    config = YAML.safe_load(File.read(TRANSCRIPTION_YML)) rescue {}
+    api_key = config['openai_api_key'].to_s.strip
+    info "Using API key from #{TRANSCRIPTION_YML}" unless api_key.empty?
   end
 end
 
-die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai_api_key in llm.yml' \
+die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai_api_key in transcription.yml' \
   if api_key.nil? || api_key.strip.empty?
 
 language = ENV['OPENAI_LANGUAGE'].to_s.strip

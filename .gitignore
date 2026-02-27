@@ -27,3 +27,4 @@ Thumbs.db
 # Configuration (API keys)
 config/llm.yml
 src/ai-summary/llm.yml
+src/scripts/transcription/transcription.yml

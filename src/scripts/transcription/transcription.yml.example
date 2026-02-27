@@ -1,0 +1,21 @@
+# transcription.yml — Configuration for the Albert AI transcription back-end.
+#
+# Copy this file to transcription.yml (gitignored) and fill in your API key.
+# In production, place it alongside transcribe.rb at:
+#   /usr/local/bigbluebutton/core/lib/transcription/transcription.yml
+#
+# Environment variables always take priority over values set here:
+#   ALBERT_API_KEY   — API key
+#   ALBERT_MODEL     — model name override
+#   ALBERT_LANGUAGE  — language code override
+
+# Your Albert AI API key (required). Get one at https://albert.api.etalab.gouv.fr
+albert_api_key: "your-albert-api-key-here"
+openai_api_key: "your-openai-api-key-here"
+
+# ASR model to use (optional). Leave blank to let the API choose.
+# Call GET /v1/models to list available automatic-speech-recognition models.
+# albert_model: "openai/whisper-large-v3"
+
+# Output language as ISO-639-1 code (optional). Leave blank for auto-detection.
+# language: "fr"
