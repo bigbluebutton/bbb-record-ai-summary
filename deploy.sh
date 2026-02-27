@@ -12,6 +12,7 @@ WHISPER_INSTALL_DIR="/usr/local/bin/whisper.cpp"
 WHISPER_MODEL="base"
 PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 POST_ARCHIVE_SRC="$PROJECT_ROOT/src/scripts/post_archive"
+POST_PUBLISH_SRC="$PROJECT_ROOT/src/scripts/post_publish"
 FORMAT_SRC="$PROJECT_ROOT/src/ai-summary"
 DRY_RUN=false
 
@@ -124,6 +125,14 @@ mkdir -p "$BBB_SCRIPTS/post_archive"
 cp -r "$POST_ARCHIVE_SRC/." "$BBB_SCRIPTS/post_archive/"
 
 # ---------------------------------------------------------------------------
+# Deploy post_publish scripts
+# ---------------------------------------------------------------------------
+echo "--- Deploying post_publish scripts ---"
+mkdir -p "$BBB_SCRIPTS/post_publish"
+
+cp -r "$POST_PUBLISH_SRC/." "$BBB_SCRIPTS/post_publish/"
+
+# ---------------------------------------------------------------------------
 # Deploy ai-summary format
 # ---------------------------------------------------------------------------
 echo "--- Deploying ai-summary format ---"
@@ -141,6 +150,12 @@ mkdir -p "$BBB_LIB/ai-summary"
 
 cp "$FORMAT_SRC/lib/llm_client.rb" "$BBB_LIB/ai-summary"
 cp "$FORMAT_SRC/llm.yml" "$BBB_LIB/ai-summary"
+if [ -f "$FORMAT_SRC/docs.yml" ]; then
+  cp "$FORMAT_SRC/docs.yml" "$BBB_LIB/ai-summary"
+else
+  echo "  WARNING: src/ai-summary/docs.yml not found — docs upload will be skipped at runtime."
+  echo "           Copy docs.yml.example to docs.yml and fill in your credentials."
+fi
 
 # Copy template files to correct place
 # /usr/local/bigbluebutton/core/playback/ai-summary

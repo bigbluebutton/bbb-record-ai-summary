@@ -1,0 +1,13 @@
+# Copy to docs.yml and fill in your values before deploying.
+
+# Set to false to disable publishing to Docs entirely.
+enabled: true
+
+# Base URL of the Docs service
+docs_host: https://docs.example.com
+
+# Keycloak OIDC settings (client_credentials grant)
+keycloak_host: id.bbb.imdt.dev
+realm: docs
+client_id: docs
+client_secret: CHANGE_ME_OIDC_CLIENT_SECRET
