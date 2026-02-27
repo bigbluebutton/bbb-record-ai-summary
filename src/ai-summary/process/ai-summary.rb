@@ -157,6 +157,7 @@ module MarkdownConverter
     lines = html.lines
     result = []
     in_list = false
+    pending_blanks = []
 
     lines.each do |line|
       # Check for unordered list item (starts with -, *, or +)
@@ -165,19 +166,30 @@ module MarkdownConverter
           result << '<ul>'
           in_list = true
         end
+        # Discard any blank lines that appeared between list items (loose list)
+        pending_blanks.clear
         content = line.sub(/^\s*[-*+]\s+/, '').strip
         result << "<li>#{content}</li>"
+      elsif line.strip.empty? && in_list
+        # Blank line inside a list — hold it until we know if the list continues
+        pending_blanks << line
       else
         if in_list
           result << '</ul>'
           in_list = false
+          result.concat(pending_blanks)
+          pending_blanks = []
         end
         result << line
       end
     end
 
     # Close list if still open
-    result << '</ul>' if in_list
+    if in_list
+      result << '</ul>'
+    else
+      result.concat(pending_blanks)
+    end
 
     result.join
   end
@@ -186,27 +198,39 @@ module MarkdownConverter
     lines = html.lines
     result = []
     in_list = false
+    pending_blanks = []
 
     lines.each do |line|
-      # Check for ordered list item (starts with number followed by . or ))
+      # Check for ordered list item (starts with number followed by .)
       if line.match?(/^\s*\d+\.\s+(.+)/)
         unless in_list
           result << '<ol>'
           in_list = true
         end
+        # Discard any blank lines that appeared between list items (loose list)
+        pending_blanks.clear
         content = line.sub(/^\s*\d+\.\s+/, '').strip
         result << "<li>#{content}</li>"
+      elsif line.strip.empty? && in_list
+        # Blank line inside a list — hold it until we know if the list continues
+        pending_blanks << line
       else
         if in_list
           result << '</ol>'
           in_list = false
+          result.concat(pending_blanks)
+          pending_blanks = []
         end
         result << line
       end
     end
 
     # Close list if still open
-    result << '</ol>' if in_list
+    if in_list
+      result << '</ol>'
+    else
+      result.concat(pending_blanks)
+    end
 
     result.join
   end
@@ -283,6 +307,13 @@ module Extractors
   end
 
   class PollsExtractor
+    # Both PollPublishedRecordEvent and PollStartedRecordEvent store answers as JSONs
+    def self.parse_answers_json(raw_json)
+      JSON.parse(raw_json).map { |a| { text: a["key"], votes: a["numVotes"].to_i } }
+    rescue StandardError
+      []
+    end
+
     def self.extract(events_doc, logger)
       polls = []
       published_poll_ids = Set.new
@@ -293,14 +324,7 @@ module Extractors
         question = event.at_xpath("question")&.text
         next unless question
 
-        answers = []
-        event.xpath(".//answer").each do |answer|
-          answers << {
-            text: answer.at_xpath("key")&.text,
-            votes: answer.at_xpath("numVotes")&.text.to_i
-          }
-        end
-
+        answers = parse_answers_json(event.at_xpath("answers")&.text.to_s)
         polls << { id: poll_id, question: question, answers: answers }
         published_poll_ids << poll_id
       end
