@@ -17,7 +17,7 @@ After a BBB meeting is recorded, this format adds:
 
 ## Deployment
 
-Previous to all deployment and configuration, remember that this integration will only work with Livekit. See [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) for better understanding of that.
+Previous to all deployment and configuration, keep in mind that this integration will only work with Livekit. See [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) to better understand how to configure it.
 
 ### Step 1 — Copy and configure the credential files
 
