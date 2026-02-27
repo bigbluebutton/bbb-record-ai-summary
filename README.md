@@ -1,4 +1,4 @@
-# bbb-playback-ai — `ai-summary` Recording Format
+# bbb-record-ai-summary — `ai-summary` Recording Format
 
 An `ai-summary` playback format for [BigBlueButton](https://bigbluebutton.org/) that enriches meeting recordings with AI-powered features: automatic audio transcription, speaker diarization, LLM-generated summaries, and action item extraction.
 
@@ -14,42 +14,6 @@ After a BBB meeting is recorded, this format adds:
 - **Action items** — optional structured action item extraction via LLM
 - **HTML report** — a standalone, print-ready HTML page with dark/light mode and an embedded transcript viewer
 - **Markdown + PDF** — the report is also available as Markdown and converted to PDF via pandoc
-
-## Project Structure
-
-```
-bbb-playback-ai/
-├── src/
-│   ├── ai-summary/
-│   │   ├── process/
-│   │   │   └── ai-summary.rb          # BBB process stage script
-│   │   ├── publish/
-│   │   │   └── ai-summary.rb          # BBB publish stage script
-│   │   ├── lib/
-│   │   │   └── llm_client.rb          # Multi-provider LLM abstraction
-│   │   ├── templates/
-│   │   │   ├── ai-summary.md.erb      # Markdown output template
-│   │   │   └── ai-summary.html.erb    # HTML output template
-│   │   ├── ai-summary.yml             # Format configuration
-│   │   └── llm.yml.example            # LLM config template (copy → llm.yml)
-│   └── scripts/
-│       └── post_archive/
-│           └── transcribe_audio.rb    # Post-archive audio transcription hook
-│   └── scripts/
-│       ├── post_archive/
-│       │   └── transcribe_audio.rb    # Post-archive audio transcription hook
-│       └── transcription/             # Provider scripts (deploy one as transcribe.rb)
-│           └── openai_whisper.rb      # OpenAI Whisper API provider
-├── ai-summary-playback.nginx          # Nginx location block
-├── recording/                         # Test workspace (gitignored)
-│   ├── raw/                           # Raw recordings input
-│   ├── process/ai-summary/            # Process stage output
-│   ├── publish/ai-summary/            # Publish stage output
-│   └── status/                        # .done / .fail marker files
-├── logs/                              # Processing logs (gitignored)
-├── deploy.sh                          # Deploy to production BBB server
-└── deploy_transcription.sh            # Deploy a transcription provider
-```
 
 ## Transcription
 
@@ -130,10 +94,16 @@ Timestamps (`from` / `to`) are in **milliseconds**. Place the script in `src/scr
 
 ### API key configuration
 
-Provider scripts read the OpenAI API key from (in priority order):
+Provider scripts read their API key from (in priority order):
 
-1. `OPENAI_API_KEY` environment variable
-2. `openai_api_key` field in `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`
+1. Environment variable — `OPENAI_API_KEY` (openai_whisper) or `ALBERT_API_KEY` (albert_whisper)
+2. `transcription.yml` at `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml`
+
+```yaml
+# /usr/local/bigbluebutton/core/lib/transcription/transcription.yml
+openai_api_key: 'sk-...'   # for openai_whisper
+# albert_api_key: '...'    # for albert_whisper
+```
 
 ### Output format
 
@@ -156,14 +126,49 @@ Provider scripts read the OpenAI API key from (in priority order):
 
 ## Deployment
 
+Previous to all deployment and configuration, remember that this integration will only work with Livekit. See [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) for better understanding of that.
+
+### Step 1 — Copy and configure the credential files
+
+Both files below are read by `deploy.sh` and copied to the server. Configure them before running the deploy script.
+
+**LLM provider** (`src/ai-summary/llm.yml`):
+
+```bash
+cp src/ai-summary/llm.yml.example src/ai-summary/llm.yml
+```
+
+Edit `src/ai-summary/llm.yml` and properly configure the provider. It will be one of the following:
+
+- disabled;
+- openai;
+- claude;
+- albert;
+
+Set `provider: 'disabled'` to skip LLM summarization entirely. After deployment this file lives at `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
+
+**Docs publishing** (`src/ai-summary/docs.yml`, optional):
+
+```bash
+cp src/ai-summary/docs.yml.example src/ai-summary/docs.yml
+```
+
+Edit `src/ai-summary/docs.yml` with your [La Suite Numérique Docs](https://lasuite.numerique.gouv.fr/) Keycloak OIDC client credentials.
+
+If this file is absent, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
+
+```
+meta_bbb-docs-document-id=<parent-document-uuid>
+```
+
+### Step 2 — Deploy
+
 `deploy.sh` copies all files to the correct locations on a BBB server and installs whisper.cpp. Requires root.
 
 ```bash
 ./deploy.sh           # deploy everything
 ./deploy.sh --dry-run # preview without writing
 ```
-
-What it deploys:
 
 | Source | Destination |
 |---|---|
@@ -176,7 +181,9 @@ What it deploys:
 | `src/ai-summary/ai-summary.yml` | `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` |
 | `ai-summary-playback.nginx` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 
-After deployment, wire the format into the BBB recording pipeline by editing `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
+### Step 3 — Wire the recording pipeline
+
+Edit `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
 
 ```yaml
 steps:
@@ -189,10 +196,39 @@ steps:
   "process:ai-summary": "publish:ai-summary"
 ```
 
-Then restart the recording worker:
+### Step 4 — Restart the recording worker
 
 ```bash
 systemctl restart bbb-rap-resque-worker
+```
+
+### Step 5 — (Recommended) Deploy a back-end transcription provider
+
+By default the fallback is a local `whisper.cpp` instance, which works but consumes server CPU. For production use, configure a cloud transcription provider:
+
+```bash
+cp src/scripts/transcription/transcription.yml.example src/scripts/transcription/transcription.yml
+```
+
+Edit `src/scripts/transcription/transcription.yml` and fill in your API key:
+
+```yaml
+openai_api_key: "sk-..."       # for openai_whisper
+# albert_api_key: "your-key"  # for albert_whisper
+```
+
+Then deploy the provider of your choice (this also copies `transcription.yml` to the server):
+
+```bash
+./deploy_transcription.sh openai_whisper   # OpenAI Whisper API
+# or
+./deploy_transcription.sh albert_whisper   # Albert (French gov API)
+```
+
+To revert to the local whisper.cpp fallback at any time:
+
+```bash
+sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
 ```
 
 ## LLM Configuration
