@@ -243,10 +243,17 @@ tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log
 
 ## Dependencies
 
-- **whisper.cpp** — installed by `deploy.sh` to `/usr/local/bin/whisper.cpp`
-- **ffmpeg** — audio format conversion (for whisper.cpp)
-- **pandoc + texlive-xetex** — Markdown to PDF conversion
-- **Ruby gems**: `optimist`, `builder`, `nokogiri`, `anthropic` (optional), `openai` (optional)
+The following system dependencies are installed automatically by `deploy.sh`:
+
+- **whisper.cpp** — installed to `/usr/local/bin/whisper.cpp`
+- **ffmpeg** — audio format conversion (required by whisper.cpp)
+- **pandoc** — Markdown to PDF conversion
+- **texlive-xetex** — XeLaTeX PDF engine used by pandoc (`--pdf-engine=xelatex`)
+- **texlive-fonts-recommended**, **texlive-plain-generic** — font and macro support for XeLaTeX
+
+Ruby gems (install manually or via Bundler):
+
+- `optimist`, `builder`, `nokogiri`, `anthropic` (optional), `openai` (optional)
 
 ## Further Reading
 

@@ -9,7 +9,7 @@ BBB_SCRIPTS="$BBB_CORE/scripts"
 BBB_LIB="$BBB_CORE/lib"
 NGINX_DIR="/usr/share/bigbluebutton/nginx"
 WHISPER_INSTALL_DIR="/usr/local/bin/whisper.cpp"
-WHISPER_MODEL="base.en"
+WHISPER_MODEL="base"
 PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 POST_ARCHIVE_SRC="$PROJECT_ROOT/src/scripts/post_archive"
 FORMAT_SRC="$PROJECT_ROOT/src/ai-summary"
@@ -91,6 +91,27 @@ else
   bash "$WHISPER_INSTALL_DIR/models/download-ggml-model.sh" "$WHISPER_MODEL" 2>&1 \
     || { echo "  ERROR: Model download failed."; exit 1; }
   echo "  Model ready: $MODEL_FILE"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# Ensure pandoc + xelatex are installed (for Markdown → PDF conversion)
+# ---------------------------------------------------------------------------
+echo "--- Checking pandoc + xelatex ---"
+PANDOC_PKGS=()
+for pkg in pandoc texlive-xetex texlive-fonts-recommended texlive-plain-generic; do
+  if ! dpkg -l "$pkg" &>/dev/null; then
+    PANDOC_PKGS+=("$pkg")
+  fi
+done
+
+if [ ${#PANDOC_PKGS[@]} -eq 0 ]; then
+  echo "[pandoc] Already installed"
+else
+  echo "[pandoc] Installing: ${PANDOC_PKGS[*]}"
+  if ! $DRY_RUN; then
+    apt-get install -y -qq "${PANDOC_PKGS[@]}"
+  fi
 fi
 echo ""
 

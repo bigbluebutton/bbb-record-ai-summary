@@ -35,11 +35,13 @@ module LLMClient
         ClaudeClient.new(config, logger)
       when 'openai'
         OpenAIClient.new(config, logger)
+      when 'albert'
+        AlbertClient.new(config, logger)
       when 'disabled'
         logger.info("LLM summary is disabled")
         DisabledClient.new(config, logger)
       else
-        raise "Unknown LLM provider: #{provider}. Use 'claude', 'openai', or 'disabled'"
+        raise "Unknown LLM provider: #{provider}. Use 'claude', 'openai', 'albert', or 'disabled'"
       end
     end
 
@@ -153,6 +155,50 @@ module LLMClient
       result.dig('choices', 0, 'message', 'content')
     rescue Net::HTTPError => e
       raise "OpenAI API error: #{e.message}"
+    end
+  end
+
+  class AlbertClient < Base
+    API_URL = 'https://albert.api.etalab.gouv.fr/v1/chat/completions'.freeze
+    DEFAULT_MODEL = 'AgentPublic/llama3-instruct-8b'.freeze
+
+    def initialize(config, logger)
+      super
+      @api_key = ENV['ALBERT_API_KEY'] || @config['albert_api_key']
+
+      if @api_key.nil? || @api_key.empty?
+        raise "Albert API key not found. Set ALBERT_API_KEY environment variable or add albert_api_key to llm.yml"
+      end
+    end
+
+    def summarize(text)
+      model = @provider_config['model'] || DEFAULT_MODEL
+      @logger.info("Albert model: #{model}")
+      body = {
+        model: model,
+        messages: [
+          { role: 'system', content: system_prompt },
+          { role: 'user', content: text }
+        ]
+      }
+
+      body[:max_tokens] = @provider_config['max_tokens'] unless @provider_config['max_tokens'].nil?
+      body[:temperature] = @provider_config['temperature'] unless @provider_config['temperature'].nil?
+
+      uri = URI(API_URL)
+      request = Net::HTTP::Post.new(uri)
+      request['Authorization'] = "Bearer #{@api_key}"
+      request['content-type'] = 'application/json'
+      request.body = JSON.generate(body)
+
+      response = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |http| http.request(request) }
+
+      result = JSON.parse(response.body)
+      raise "Albert API error: #{result.dig('error', 'message')}" if result['error']
+
+      result.dig('choices', 0, 'message', 'content')
+    rescue Net::HTTPError => e
+      raise "Albert API error: #{e.message}"
     end
   end
 end

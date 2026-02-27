@@ -1,7 +1,7 @@
 # LLM Configuration for Meeting Summarization
 # Copy this file to llm.yml and configure your settings
 
-# Provider selection: 'claude', 'openai', or 'disabled'
+# Provider selection: 'claude', 'openai', 'albert', or 'disabled'
 # Set to 'disabled' to skip AI summarization
 provider: 'disabled'
 
@@ -9,9 +9,11 @@ provider: 'disabled'
 # Environment variables take priority over these values:
 #   - ANTHROPIC_API_KEY for Claude
 #   - OPENAI_API_KEY for OpenAI
+#   - ALBERT_API_KEY for Albert (albert.api.etalab.gouv.fr)
 # Leave blank to use environment variables only
 anthropic_api_key: ''
 openai_api_key: ''
+albert_api_key: ''
 
 # Claude (Anthropic) Configuration
 claude:
@@ -24,6 +26,12 @@ openai:
   model: 'o4-mini'  # or 'gpt-4o' for better quality
   # max_tokens: 1024 # - o4-mini doesn't expect these parameters
   # temperature: 0.7 # - make sure the model chosen fits the parameters
+
+# Albert Configuration (albert.api.etalab.gouv.fr — French government API)
+albert:
+  model: 'AgentPublic/llama3-instruct-8b'  # check available models at albert.api.etalab.gouv.fr
+  max_tokens: 1024
+  temperature: 0.7
 
 # System prompt for summarization
 system_prompt: |
