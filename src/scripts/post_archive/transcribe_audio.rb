@@ -103,7 +103,7 @@ class WhisperBackend
     end
   end
 
-  def transcribe(audio_file, output_json)
+  def transcribe(audio_file, output_json, _events_xml = nil)
     wav_path, temp_wav = convert_to_wav(audio_file)
     return false if wav_path.nil?
 
@@ -202,9 +202,9 @@ class CustomScriptBackend
     log(@logger, :info, "Back-end: #{@script}")
   end
 
-  def transcribe(audio_file, output_json)
+  def transcribe(audio_file, output_json, events_xml)
     log(@logger, :info, "Running #{File.basename(@script)}: #{File.basename(audio_file)}")
-    ok = system(@script, audio_file, output_json)
+    ok = system(@script, audio_file, output_json, events_xml)
 
     if ok && File.exist?(output_json)
       log(@logger, :info, "  -> #{File.basename(output_json)}")
@@ -288,7 +288,8 @@ unless backend.available?
 
   unless backend.available?
     backend.report_status
-    exit 1
+    log(logger, :warn, "No transcription backend available — skipping transcription.")
+    exit 0
   end
 
   log(logger, :info, "Back-end: whisper.cpp (built-in fallback)")
@@ -308,12 +309,14 @@ end
 track_results = []   # { file:, segments:, ok: }
 temp_files    = []   # paths to clean up regardless of outcome
 
+events_xml = File.join(raw_dir, 'events.xml')
+
 audio_files.each do |audio_file|
   basename  = File.basename(audio_file)
   temp_json = File.join(transcription_dir, ".tmp_#{basename}.json")
   temp_files << temp_json
 
-  success = backend.transcribe(audio_file, temp_json)
+  success = backend.transcribe(audio_file, temp_json, events_xml)
 
   unless success
     track_results << { file: basename, segments: [], ok: false }
@@ -360,8 +363,7 @@ track_results.reject { |r| r[:ok] }.each do |r|
 end
 
 if failed_count > 0
-  File.delete(OUTPUT_JSON) if File.exist?(OUTPUT_JSON)
-  log(logger, :warn, "  Output file deleted — fix the errors and re-run to retry")
+  log(logger, :warn, "  #{failed_count} track(s) failed — partial transcription.json retained")
 end
 
-exit(failed_count.zero? ? 0 : 1)
+exit 0

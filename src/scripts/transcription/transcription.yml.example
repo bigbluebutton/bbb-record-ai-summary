@@ -19,3 +19,11 @@ openai_api_key: "your-openai-api-key-here"
 
 # Output language as ISO-639-1 code (optional). Leave blank for auto-detection.
 # language: "fr"
+
+# Voice Activity Detection — filters out clips with little or no detected speech
+# before sending them to Albert, preventing hallucinations on keyboard noise,
+# static, and other non-speech audio.
+# Only applied to clips shorter than 10 seconds; longer clips are always sent.
+# Requires node-vad: run  npm install node-vad  in the transcription directory.
+# vad_enabled: true
+# vad_speech_threshold: 0.065   # fraction of 30ms frames that must be VOICE (0.0–1.0)

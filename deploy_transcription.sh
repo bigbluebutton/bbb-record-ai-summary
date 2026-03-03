@@ -98,6 +98,21 @@ else
   fi
   chmod +x "$DEST_FILE"
   echo "Deployed: $DEST_FILE"
+
+  # albert_whisper uses node-vad for WebRTC VAD — install globally if needed
+  if [ "$PROVIDER" = "albert_whisper" ]; then
+    if command -v node &>/dev/null && command -v npm &>/dev/null; then
+      if npm list -g node-vad --depth=0 &>/dev/null; then
+        echo "node-vad already installed (global)"
+      else
+        echo "Installing node-vad globally..."
+        npm install -g node-vad --silent
+      fi
+    else
+      echo "WARNING: node/npm not found — VAD will be disabled at runtime."
+      echo "         Install Node.js then run: npm install -g node-vad"
+    fi
+  fi
 fi
 
 echo ""
