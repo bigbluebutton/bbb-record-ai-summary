@@ -1,12 +1,11 @@
 #!/usr/bin/env ruby
 # encoding: UTF-8
 #
-# albert_whisper.rb — Language-detected transcription via Albert AI API.
+# albert_whisper.rb — Transcription via Albert AI API.
 #
 # Strategy:
-#   1. Run whisper.cpp locally → language detection only
-#   2. POST audio to Albert API → high-quality full text
-#   3. Use events.xml (BBB) to derive per-segment timestamps
+#   1. POST audio to Albert API → high-quality full text
+#   2. Use events.xml (BBB) to derive per-segment timestamps
 #
 # Deploy as transcribe.rb in the transcription lib dir:
 #   cp src/scripts/transcription/albert_whisper.rb \
@@ -26,10 +25,6 @@
 #   ALBERT_MODEL
 #   ALBERT_LANGUAGE
 #
-# whisper.cpp install paths (set by deploy.sh):
-#   Binary : /usr/local/bin/whisper.cpp/build/bin/whisper-cli
-#   Model  : /usr/local/bin/whisper.cpp/models/ggml-base.bin
-#
 # Output format (as expected by transcribe_audio.rb):
 #   {
 #     "transcription": [
@@ -48,8 +43,6 @@ require 'nokogiri'
 
 BASE_URL       = 'https://albert.api.etalab.gouv.fr'.freeze
 ENDPOINT_PATH  = '/v1/audio/transcriptions'.freeze
-WHISPER_BIN    = '/usr/local/bin/whisper.cpp/build/bin/whisper-cli'.freeze
-WHISPER_MODEL  = '/usr/local/bin/whisper.cpp/models/ggml-base.bin'.freeze
 
 # Talking cues closer than this (ms) are merged into a single chunk before
 MERGE_GAP_MS        = 3_000
@@ -271,30 +264,6 @@ def convert_to_wav(audio_file)
   [temp_wav, temp_wav]
 end
 
-# Runs whisper.cpp on wav_path for language detection only.
-# Returns the detected language code (e.g. "fr") or nil.
-def detect_language(wav_path)
-  return nil unless File.executable?(WHISPER_BIN) && File.exist?(WHISPER_MODEL)
-
-  info "Running whisper.cpp for language detection..."
-  stdout_err = IO.popen([WHISPER_BIN, '-m', WHISPER_MODEL, '-f', wav_path, '-l', 'auto', '--detect-language', err: [:child, :out]], &:read)
-  status = $?
-
-  unless status.success?
-    info "whisper.cpp failed — language will not be auto-detected"
-    return nil
-  end
-
-  lang_match = stdout_err.match(/auto-detected language:\s+([a-z]{2,3})/i)
-  language   = lang_match ? lang_match[1].downcase : nil
-
-  info "whisper.cpp: detected language: #{language || 'unknown'}"
-  language
-rescue => e
-  info "whisper.cpp error: #{e.message} — language will not be auto-detected"
-  nil
-end
-
 # Removes runs of 3+ identical consecutive words from Albert's raw text.
 def clean_repeated_words(text)
   words = text.split
@@ -362,15 +331,6 @@ work_file, temp_file = convert_to_wav(audio_file)
 die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if work_file.nil?
 
 info "Audio: #{File.basename(audio_file)} (#{(File.size(work_file) / 1024.0).round(1)} KB)"
-
-# 1 — whisper.cpp: language detection only
-if language.nil?
-  detected = detect_language(work_file)
-  if detected
-    language = detected
-    info "Detected language: #{language}"
-  end
-end
 
 info "Model    : #{model}"
 info "Language : #{language || '(auto-detect)'}"
