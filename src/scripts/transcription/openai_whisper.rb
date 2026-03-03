@@ -14,8 +14,8 @@
 # Config file (same directory as this script):
 #   transcription.yml — must contain openai_api_key
 #
-# Optional: set OPENAI_API_KEY env var to override the config file value.
-# Optional env variables:
+# Environment variables override config file values:
+#   OPENAI_API_KEY  — API key
 #   OPENAI_LANGUAGE — BCP-47 language code (e.g. "pt", "es"); omit for auto-detection
 #
 # OpenAI Whisper API file size limit: 25 MB.
@@ -72,20 +72,22 @@ die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
 # Resolve API key: env var takes priority, then transcription.yml in the same directory.
 TRANSCRIPTION_YML = File.join(__dir__, 'transcription.yml').freeze
 
-api_key = ENV['OPENAI_API_KEY']
-
-if api_key.nil? || api_key.strip.empty?
-  if File.exist?(TRANSCRIPTION_YML)
-    config = YAML.safe_load(File.read(TRANSCRIPTION_YML)) rescue {}
-    api_key = config['openai_api_key'].to_s.strip
-    info "Using API key from #{TRANSCRIPTION_YML}" unless api_key.empty?
-  end
+config     = {}
+# yml_path   = TRANSCRIPTION_YML_PATHS.find { |p| File.exist?(p) }
+if File.exist?(TRANSCRIPTION_YML)
+  config = YAML.safe_load(File.read(TRANSCRIPTION_YML)) rescue {}
+  info "Loaded config from #{TRANSCRIPTION_YML}"
 end
+openai_cfg = config['openai'] || {}
 
-die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai_api_key in transcription.yml' \
-  if api_key.nil? || api_key.strip.empty?
+api_key = ENV['OPENAI_API_KEY'].to_s.strip
+api_key = openai_cfg['api_key'].to_s.strip if api_key.empty?
+
+die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai.api_key in transcription.yml' \
+  if api_key.empty?
 
 language = ENV['OPENAI_LANGUAGE'].to_s.strip
+language = config['language'].to_s.strip if language.empty?
 language = nil if language.empty?
 
 # ---------------------------------------------------------------------------

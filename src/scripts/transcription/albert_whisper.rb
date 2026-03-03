@@ -53,10 +53,13 @@ WHISPER_MODEL  = '/usr/local/bin/whisper.cpp/models/ggml-base.bin'.freeze
 
 # Talking cues closer than this (ms) are merged into a single chunk before
 MERGE_GAP_MS        = 3_000
-# Cues shorter than this after merging are skipped entirely.
-MIN_CUE_MS          = 1_000
 # VAD is only run on clips shorter than this (longer clips are assumed speech).
 VAD_MAX_DURATION_MS = 10_000
+# Minimum absolute speech duration (ms) required for a clip to pass VAD.
+# The adaptive threshold is MIN_SPEECH_MS / clip_duration_ms, floored at the
+# configured vad_speech_threshold. Keeps short clips from passing on just a
+# few noise frames while avoiding an overly strict threshold on longer clips.
+VAD_MIN_SPEECH_MS   = 150
 # If Albert returns this many words or fewer, re-run VAD regardless of clip length.
 MIN_TRANSCRIPTION_WORDS = 3
 VAD_NODE_PATH       = `npm root -g 2>/dev/null`.strip.freeze
@@ -96,11 +99,23 @@ VAD_INLINE_JS = <<~'JS'
   run().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
 JS
 
-def has_speech?(wav_path, enabled:, threshold: 0.05, force: false)
+def has_speech?(wav_path, enabled:, threshold: 0.05,
+                min_speech_ms: VAD_MIN_SPEECH_MS, max_duration_ms: VAD_MAX_DURATION_MS,
+                force: false)
   return true unless enabled || force
 
   duration_ms = audio_duration_ms(wav_path).to_i
-  return true if !force && duration_ms > VAD_MAX_DURATION_MS
+  return true if !force && duration_ms > max_duration_ms
+
+  # Adaptive threshold: for short clips a fixed percentage can mean only a few
+  # milliseconds of speech (e.g. 5% of 600 ms = 30 ms — humanly impossible).
+  # Derive the threshold from the minimum absolute speech duration, floored at
+  # the configured base threshold so long clips aren't penalized.
+  adaptive = if duration_ms > 0
+    [[min_speech_ms.to_f / duration_ms, threshold].max, 0.80].min
+  else
+    threshold
+  end
 
   env = { 'VAD_WAV' => wav_path }
   env['NODE_PATH'] = VAD_NODE_PATH unless VAD_NODE_PATH.empty?
@@ -112,8 +127,8 @@ def has_speech?(wav_path, enabled:, threshold: 0.05, force: false)
   end
 
   ratio = out.strip.to_f
-  info "  → VAD: #{(ratio * 100).round(1)}% speech frames (threshold: #{(threshold * 100).round(1)}%)"
-  ratio >= threshold
+  info "  → VAD: #{(ratio * 100).round(1)}% speech frames (threshold: #{(adaptive * 100).round(1)}%)"
+  ratio >= adaptive
 rescue => e
   info "  → VAD error: #{e.message}, passing through"
   true
@@ -170,7 +185,6 @@ def extract_talking_cues(events_doc, audio_file)
 end
 
 # Merges cues whose inter-cue gap is less than gap_ms,
-# then drops any cue shorter than MIN_CUE_MS
 def merge_nearby_cues(cues, gap_ms)
   return [] if cues.empty?
 
@@ -183,8 +197,7 @@ def merge_nearby_cues(cues, gap_ms)
       merged << curr.dup
     end
   end
-
-  merged.reject { |c| c['to'] - c['from'] < MIN_CUE_MS }
+  merged
 end
 
 # Cuts a time slice from wav_path with ffmpeg. Returns temp file path or nil.
@@ -323,21 +336,26 @@ if yml_path
   info "Loaded config from #{yml_path}"
 end
 
+albert_cfg = config['albert'] || {}
+vad_cfg    = albert_cfg['vad'] || {}
+
 api_key = ENV['ALBERT_API_KEY'].to_s.strip
-api_key = config['albert_api_key'].to_s.strip if api_key.empty?
-die 'No Albert API key found. Set ALBERT_API_KEY or configure albert_api_key in transcription.yml' \
+api_key = albert_cfg['api_key'].to_s.strip if api_key.empty?
+die 'No Albert API key found. Set ALBERT_API_KEY or configure albert.api_key in transcription.yml' \
   if api_key.empty?
 
 model = ENV['ALBERT_MODEL'].to_s.strip
-model = config['albert_model'].to_s.strip if model.empty?
-model = 'openai/whisper-large-v3'         if model.empty?
+model = albert_cfg['model'].to_s.strip if model.empty?
+model = 'openai/whisper-large-v3'      if model.empty?
 
 language = ENV['ALBERT_LANGUAGE'].to_s.strip
 language = config['language'].to_s.strip if language.empty?
 language = nil if language.empty?
 
-vad_enabled   = config['vad_enabled'] == true
-vad_threshold = (config['vad_speech_threshold'] || 0.05).to_f
+vad_enabled      = vad_cfg['enabled'] == true
+vad_threshold    = (vad_cfg['speech_threshold'] || 0.05).to_f
+vad_min_speech_ms  = (vad_cfg['min_speech_ms']   || VAD_MIN_SPEECH_MS).to_i
+vad_max_duration_ms = (vad_cfg['max_duration_ms'] || VAD_MAX_DURATION_MS).to_i
 
 # Audio conversion (whisper.cpp needs wav; ffmpeg chunk cutting needs wav)
 work_file, temp_file = convert_to_wav(audio_file)
@@ -392,7 +410,8 @@ http.start do |conn|
       end
 
       begin
-        unless has_speech?(chunk, enabled: vad_enabled, threshold: vad_threshold)
+        unless has_speech?(chunk, enabled: vad_enabled, threshold: vad_threshold,
+                           min_speech_ms: vad_min_speech_ms, max_duration_ms: vad_max_duration_ms)
           info "  → VAD: insufficient speech, skipping"
           next
         end
@@ -409,7 +428,9 @@ http.start do |conn|
 
         if word_count <= MIN_TRANSCRIPTION_WORDS
           info "  → few words, re-checking with VAD..."
-          unless has_speech?(chunk, enabled: true, threshold: vad_threshold, force: true)
+          unless has_speech?(chunk, enabled: true, threshold: vad_threshold,
+                             min_speech_ms: vad_min_speech_ms, max_duration_ms: vad_max_duration_ms,
+                             force: true)
             info "  → VAD: no speech on re-check, skipping (likely hallucination)"
             next
           end
