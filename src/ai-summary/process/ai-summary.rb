@@ -119,6 +119,9 @@ module MarkdownConverter
     html = html.gsub(/^---+$/, '<hr>')
     html = html.gsub(/^\*\*\*+$/, '<hr>')
 
+    # Convert tables (before inline formatting)
+    html = convert_tables(html)
+
     # Convert bold and italic (must be done before lists)
     html = html.gsub(/\*\*(.+?)\*\*/, '<strong>\1</strong>')
     html = html.gsub(/__(.+?)__/, '<strong>\1</strong>')
@@ -235,6 +238,53 @@ module MarkdownConverter
     result.join
   end
 
+  def self.convert_tables(html)
+    lines = html.lines
+    result = []
+    i = 0
+
+    while i < lines.length
+      # Detect table: current line has pipes and next line is a separator (|---|)
+      if lines[i].match?(/^\s*\|.+\|/) && i + 1 < lines.length && lines[i + 1].match?(/^\s*\|[\s\-:|]+\|/)
+        table_lines = []
+        j = i
+        while j < lines.length && lines[j].match?(/^\s*\|.+\|/)
+          table_lines << lines[j]
+          j += 1
+        end
+
+        header_cells = parse_table_row(table_lines[0])
+        data_rows = table_lines[2..].map { |row| parse_table_row(row) }
+
+        table_html = "<table>\n<thead>\n<tr>"
+        header_cells.each { |cell| table_html += "<th>#{cell}</th>" }
+        table_html += "</tr>\n</thead>\n<tbody>\n"
+        data_rows.each do |row|
+          table_html += "<tr>"
+          row.each { |cell| table_html += "<td>#{cell}</td>" }
+          table_html += "</tr>\n"
+        end
+        table_html += "</tbody>\n</table>\n"
+
+        result << table_html
+        i = j
+      else
+        result << lines[i]
+        i += 1
+      end
+    end
+
+    result.join
+  end
+
+  def self.parse_table_row(line)
+    parts = line.split('|')
+    # Remove leading/trailing empty strings from outer pipes
+    parts = parts[1..] if parts.first&.strip&.empty?
+    parts = parts[0..-2] if parts.last&.strip&.empty?
+    parts.map(&:strip)
+  end
+
   def self.convert_paragraphs(html)
     # Split on double newlines to identify paragraph blocks
     blocks = html.split(/\n\n+/)
@@ -244,7 +294,7 @@ module MarkdownConverter
       next block if block.empty?
 
       # Don't wrap if already HTML tags
-      if block.start_with?('<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<hr>', '<pre>', '<blockquote>')
+      if block.start_with?('<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<hr>', '<pre>', '<blockquote>', '<table>')
         block
       else
         # Check if entire block is just a list or header tag
@@ -698,6 +748,7 @@ module Extractors
       summary = llm_client.summarize(combined_text)
 
       # Return nil if disabled or empty response
+      logger.warn("LLM returned nil or empty summary — skipping summary section") if summary.nil? || summary.strip.empty?
       return nil if summary.nil? || summary.strip.empty?
 
       # Save summary to file
@@ -763,6 +814,7 @@ module Extractors
         response = llm_client.summarize(prompt)
 
         # Return empty array if disabled or empty response
+        logger.warn("LLM returned nil or empty response for action items — skipping") if response.nil? || response.strip.empty?
         return [] if response.nil? || response.strip.empty?
 
         # Parse JSON response

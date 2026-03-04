@@ -193,10 +193,19 @@ module LLMClient
 
       response = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |http| http.request(request) }
 
+      unless response.is_a?(Net::HTTPSuccess)
+        raise "Albert API HTTP #{response.code}: #{response.body[0...500]}"
+      end
+
       result = JSON.parse(response.body)
       raise "Albert API error: #{result.dig('error', 'message')}" if result['error']
 
-      result.dig('choices', 0, 'message', 'content')
+      content = result.dig('choices', 0, 'message', 'content')
+      if content.nil? || content.strip.empty?
+        finish_reason = result.dig('choices', 0, 'finish_reason')
+        @logger.warn("Albert returned empty content (finish_reason=#{finish_reason.inspect}). Full response: #{response.body[0...500]}")
+      end
+      content
     rescue Net::HTTPError => e
       raise "Albert API error: #{e.message}"
     end
