@@ -264,6 +264,19 @@ def convert_to_wav(audio_file)
   [temp_wav, temp_wav]
 end
 
+# Reads meta_recording-transcription-language
+def read_meeting_language(events_xml_path)
+  metadata_path = File.join(File.dirname(File.expand_path(events_xml_path)), 'metadata.xml')
+  return nil unless File.exist?(metadata_path)
+
+  doc  = Nokogiri::XML(File.read(metadata_path))
+  lang = doc.at_xpath('//meta/recording-transcription-language')&.text&.strip
+  lang.nil? || lang.empty? ? nil : lang
+rescue => e
+  info "Could not read metadata.xml: #{e.message}"
+  nil
+end
+
 # Removes runs of 3+ identical consecutive words from Albert's raw text.
 def clean_repeated_words(text)
   words = text.split
@@ -318,7 +331,10 @@ model = albert_cfg['model'].to_s.strip if model.empty?
 model = 'openai/whisper-large-v3'      if model.empty?
 
 language = ENV['ALBERT_LANGUAGE'].to_s.strip
-language = config['language'].to_s.strip if language.empty?
+if language.empty?
+  meeting_language = read_meeting_language(events_xml)
+  language = meeting_language || config['language'].to_s.strip
+end
 language = nil if language.empty?
 
 vad_enabled      = vad_cfg['enabled'] == true
@@ -333,7 +349,11 @@ die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if w
 info "Audio: #{File.basename(audio_file)} (#{(File.size(work_file) / 1024.0).round(1)} KB)"
 
 info "Model    : #{model}"
-info "Language : #{language || '(auto-detect)'}"
+lang_source = if !ENV['ALBERT_LANGUAGE'].to_s.strip.empty? then 'env'
+               elsif meeting_language                          then 'meta_recording-transcription-language'
+               elsif language                                  then 'transcription.yml'
+               end
+info "Language : #{language || '(auto-detect)'}#{lang_source ? " [#{lang_source}]" : ''}"
 
 # Parse talking cues from events.xml
 events_doc  = Nokogiri::XML(File.read(events_xml))
