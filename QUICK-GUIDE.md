@@ -44,8 +44,8 @@ There is no local test harness. To develop and test changes:
 
 ```bash
 # Re-run post_archive (transcription)
-sudo ruby /usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb \
-  -m <meeting_id>
+cd /usr/local/bigbluebutton/core
+sudo bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>
 
 # Remove transcription.json if you need to re-transcribe
 sudo rm /var/bigbluebutton/recording/raw/<meeting_id>/transcription/transcription.json
