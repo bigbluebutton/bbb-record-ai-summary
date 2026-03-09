@@ -55,7 +55,7 @@ steps:
 
 **Location (deployed):** `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb`
 **Trigger:** Runs after the Archive stage, before Sanity
-**Invocation:** `ruby transcribe_audio.rb -m <meeting_id>`
+**Invocation:** `cd /usr/local/bigbluebutton/core && bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>`
 
 Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `webm opus mp3 wav ogg m4a flac`) and transcribes each one.
 

@@ -111,13 +111,16 @@ module MarkdownConverter
     html = escape_html(html)
 
     # Convert headers (must be done before other formatting)
-    html = html.gsub(/^### (.+)$/m, '<h3>\1</h3>')
-    html = html.gsub(/^## (.+)$/m, '<h2>\1</h2>')
-    html = html.gsub(/^# (.+)$/m, '<h1>\1</h1>')
+    html = html.gsub(/^### (.+)$/, '<h3>\1</h3>')
+    html = html.gsub(/^## (.+)$/, '<h2>\1</h2>')
+    html = html.gsub(/^# (.+)$/, '<h1>\1</h1>')
 
     # Convert horizontal rules
     html = html.gsub(/^---+$/, '<hr>')
     html = html.gsub(/^\*\*\*+$/, '<hr>')
+
+    # Convert tables (before inline formatting)
+    html = convert_tables(html)
 
     # Convert bold and italic (must be done before lists)
     html = html.gsub(/\*\*(.+?)\*\*/, '<strong>\1</strong>')
@@ -235,6 +238,53 @@ module MarkdownConverter
     result.join
   end
 
+  def self.convert_tables(html)
+    lines = html.lines
+    result = []
+    i = 0
+
+    while i < lines.length
+      # Detect table: current line has pipes and next line is a separator (|---|)
+      if lines[i].match?(/^\s*\|.+\|/) && i + 1 < lines.length && lines[i + 1].match?(/^\s*\|[\s\-:|]+\|/)
+        table_lines = []
+        j = i
+        while j < lines.length && lines[j].match?(/^\s*\|.+\|/)
+          table_lines << lines[j]
+          j += 1
+        end
+
+        header_cells = parse_table_row(table_lines[0])
+        data_rows = table_lines[2..].map { |row| parse_table_row(row) }
+
+        table_html = "<table>\n<thead>\n<tr>"
+        header_cells.each { |cell| table_html += "<th>#{cell}</th>" }
+        table_html += "</tr>\n</thead>\n<tbody>\n"
+        data_rows.each do |row|
+          table_html += "<tr>"
+          row.each { |cell| table_html += "<td>#{cell}</td>" }
+          table_html += "</tr>\n"
+        end
+        table_html += "</tbody>\n</table>\n"
+
+        result << table_html
+        i = j
+      else
+        result << lines[i]
+        i += 1
+      end
+    end
+
+    result.join
+  end
+
+  def self.parse_table_row(line)
+    parts = line.split('|')
+    # Remove leading/trailing empty strings from outer pipes
+    parts = parts[1..] if parts.first&.strip&.empty?
+    parts = parts[0..-2] if parts.last&.strip&.empty?
+    parts.map(&:strip)
+  end
+
   def self.convert_paragraphs(html)
     # Split on double newlines to identify paragraph blocks
     blocks = html.split(/\n\n+/)
@@ -244,7 +294,7 @@ module MarkdownConverter
       next block if block.empty?
 
       # Don't wrap if already HTML tags
-      if block.start_with?('<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<hr>', '<pre>', '<blockquote>')
+      if block.start_with?('<h1>', '<h2>', '<h3>', '<ul>', '<ol>', '<hr>', '<pre>', '<blockquote>', '<table>')
         block
       else
         # Check if entire block is just a list or header tag
@@ -302,7 +352,9 @@ module Extractors
       @word_count = words.length
       logger.info("Extracted notes: #{@word_count} words")
 
-      text_content.empty? ? nil : text_content
+      return nil if html_content.empty?
+
+      { plain_text: text_content, html: html_content }
     end
   end
 
@@ -469,7 +521,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized }
+      { plain: plain_text, diarized: diarized, language: json_data['language'] }
     end
 
     private
@@ -489,7 +541,7 @@ module Extractors
     def self.merge_and_format_transcript(segments, recording_start, logger)
       return '' if segments.empty?
 
-      lines = ['WEBVTT', '']
+      cues = []
 
       current_speaker_id   = nil
       current_speaker_name = nil
@@ -505,8 +557,8 @@ module Extractors
         )
 
         if (speaker_changed || cue_too_long) && !current_texts.empty?
-          emit_cues(lines, current_speaker_name, current_texts.join(' '),
-                    cue_start, cue_end, recording_start)
+          collect_cues(cues, current_speaker_name, current_texts.join(' '),
+                       cue_start, cue_end, recording_start)
           current_texts = []
           cue_start     = nil
         end
@@ -522,24 +574,33 @@ module Extractors
       end
 
       unless current_texts.empty?
-        emit_cues(lines, current_speaker_name, current_texts.join(' '),
-                  cue_start, cue_end, recording_start)
+        collect_cues(cues, current_speaker_name, current_texts.join(' '),
+                     cue_start, cue_end, recording_start)
       end
 
-      logger.info("Generated WebVTT with #{lines.count { |l| l.include?('-->') }} cues")
+      cues.sort_by! { |c| c[:start_ms] }
+
+      lines = ['WEBVTT', '']
+      cues.each do |cue|
+        lines << "#{format_timestamp(cue[:start_ms])} --> #{format_timestamp(cue[:end_ms])}"
+        lines << "#{cue[:speaker]}: #{cue[:text]}"
+        lines << ''
+      end
+
+      logger.info("Generated WebVTT with #{cues.size} cues")
       lines.join("\n")
     end
 
-    # Emit one or more VTT cues, splitting long text at sentence boundaries
-    def self.emit_cues(lines, speaker_name, full_text, abs_start, abs_end, recording_start)
+    # Collect one or more VTT cues into the array, splitting long text at sentence boundaries
+    def self.collect_cues(cues, speaker_name, full_text, abs_start, abs_end, recording_start)
       text = full_text.strip
       return if text.empty?
 
       if text.length <= MAX_CUE_CHARS
-        lines << "#{format_timestamp(abs_start - recording_start)} --> " \
-                 "#{format_timestamp(abs_end - recording_start)}"
-        lines << "#{speaker_name}: #{text}"
-        lines << ''
+        cues << { start_ms: abs_start - recording_start,
+                  end_ms:   abs_end   - recording_start,
+                  speaker:  speaker_name,
+                  text:     text }
         return
       end
 
@@ -565,10 +626,10 @@ module Extractors
         cue_abs_start = abs_start + (total_duration * char_ratio_start).to_i
         cue_abs_end   = abs_start + (total_duration * char_ratio_end).to_i
 
-        lines << "#{format_timestamp(cue_abs_start - recording_start)} --> " \
-                 "#{format_timestamp(cue_abs_end - recording_start)}"
-        lines << "#{speaker_name}: #{group_text.strip}"
-        lines << ''
+        cues << { start_ms: cue_abs_start - recording_start,
+                  end_ms:   cue_abs_end   - recording_start,
+                  speaker:  speaker_name,
+                  text:     group_text.strip }
 
         group_start_chars  += current_group_chars
         current_group        = []
@@ -673,7 +734,7 @@ module Extractors
       lines.join("\n\n")
     end
 
-    def self.extract(notes_content, transcript, target_dir, logger, polls: nil)
+    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil)
       # Build structured prompt with clear section labels
       sections = []
       sections << "SHARED NOTES:\n#{notes_content}" if notes_content && !notes_content.empty?
@@ -688,7 +749,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger)
+        llm_client = LLMClient::Base.create(logger, language: language)
       rescue StandardError => e
         raise "Failed to initialize LLM client: #{e.message}"
       end
@@ -698,6 +759,7 @@ module Extractors
       summary = llm_client.summarize(combined_text)
 
       # Return nil if disabled or empty response
+      logger.warn("LLM returned nil or empty summary — skipping summary section") if summary.nil? || summary.strip.empty?
       return nil if summary.nil? || summary.strip.empty?
 
       # Save summary to file
@@ -713,7 +775,7 @@ module Extractors
   end
 
   class ActionItemsExtractor
-    def self.extract(summary, transcript, target_dir, logger, polls: nil)
+    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil)
       # Build input for LLM
       sections = []
       sections << "MEETING SUMMARY:\n#{summary}" if summary && !summary.empty?
@@ -729,7 +791,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger)
+        llm_client = LLMClient::Base.create(logger, language: language)
       rescue StandardError => e
         logger.warn("Failed to initialize LLM client for action items: #{e.message}")
         return []
@@ -763,6 +825,7 @@ module Extractors
         response = llm_client.summarize(prompt)
 
         # Return empty array if disabled or empty response
+        logger.warn("LLM returned nil or empty response for action items — skipping") if response.nil? || response.strip.empty?
         return [] if response.nil? || response.strip.empty?
 
         # Parse JSON response
@@ -945,6 +1008,8 @@ unless FileTest.directory?(target_dir)
     # Initialize notes extractor and extract content
     notes_extractor = Extractors::NotesExtractor.new
     notes_content = notes_extractor.extract(raw_archive_dir, method(:html_to_plain_text), BigBlueButton.logger)
+    notes_plain_text = notes_content&.fetch(:plain_text)
+    notes_html_content = notes_content&.fetch(:html)
     word_count = notes_extractor.word_count
 
     # Extract all other data using extractors
@@ -955,16 +1020,17 @@ unless FileTest.directory?(target_dir)
     polls = Extractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
 
     # Handle transcript format (can be string or hash with plain/diarized)
-    transcript_plain = transcript.is_a?(Hash) ? transcript[:plain] : transcript
+    transcript_plain    = transcript.is_a?(Hash) ? transcript[:plain]    : transcript
     transcript_diarized = transcript.is_a?(Hash) ? transcript[:diarized] : nil
+    transcript_language = transcript.is_a?(Hash) ? transcript[:language] : nil
 
     transcript_cues = WebVTTParser.parse(transcript_diarized)
 
-    summary = Extractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger, polls: polls)
+    summary = Extractors::SummaryExtractor.extract(notes_plain_text, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language)
 
     # Collect all data for template
     md_template_data = {
-      notes_content: notes_content,
+      notes_content: notes_plain_text,
       word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
@@ -985,11 +1051,11 @@ unless FileTest.directory?(target_dir)
 
     # Extract action items using LLM
     action_items = Extractors::ActionItemsExtractor.extract(
-      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls
+      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language
     )
 
-    # Convert notes content to HTML
-    notes_html = MarkdownConverter.convert(notes_content)
+    # Use the pre-extracted HTML notes content directly
+    notes_html = notes_html_content
 
     # Convert summary markdown to HTML for structured rendering
     summary_html = summary && !summary.empty? ? MarkdownConverter.convert(summary) : nil

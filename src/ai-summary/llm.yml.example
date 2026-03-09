@@ -33,6 +33,12 @@ albert:
   max_tokens: 1024
   temperature: 0.7
 
+# Force the summary output language (ISO 639-1 code, e.g. 'en', 'fr', 'es').
+# Takes priority over the language detected from the transcription.
+# When set, an instruction is appended to the system prompt overriding the language.
+# When omitted, the system prompt below instructs the LLM to detect the language automatically.
+# language: 'en'
+
 # System prompt for summarization
 system_prompt: |
   You are summarizing a BigBlueButton meeting. You will receive the shared notes
@@ -45,6 +51,7 @@ system_prompt: |
   3. Action items (if any)
   4. Important points raised
 
-  Write the summary in the same language as the transcript. Do not translate it.
+  Detect the language of the transcript and write the entire summary in that same language.
+  Never translate or switch languages.
 
   Keep the summary clear, professional, and under 500 words.
