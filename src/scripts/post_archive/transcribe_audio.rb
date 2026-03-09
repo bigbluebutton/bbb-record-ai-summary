@@ -38,7 +38,7 @@
 #      found in the models/ directory next to the binary.
 #
 # BBB pipeline usage:
-#   ruby transcribe_audio.rb -m <meeting_id>
+#   cd /usr/local/bigbluebutton/core && bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>
 #
 
 require '/usr/local/bigbluebutton/core/lib/recordandplayback'
@@ -316,7 +316,19 @@ audio_files.each do |audio_file|
   temp_json = File.join(transcription_dir, ".tmp_#{basename}.json")
   temp_files << temp_json
 
-  success = backend.transcribe(audio_file, temp_json, events_xml)
+  success = false
+  max_attempts = 5
+  wait = 5
+  max_attempts.times do |attempt|
+    File.delete(temp_json) if File.exist?(temp_json)
+    success = backend.transcribe(audio_file, temp_json, events_xml)
+    break if success
+    if attempt + 1 < max_attempts
+      log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
+      sleep(wait)
+      wait *= 2
+    end
+  end
 
   unless success
     track_results << { file: basename, segments: [], ok: false }
@@ -329,7 +341,7 @@ audio_files.each do |audio_file|
       { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
     end.reject { |s| s['text'].empty? }
 
-    track_results << { file: basename, segments: segments, ok: true }
+    track_results << { file: basename, segments: segments, ok: true, language: raw['language'] }
     log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
   rescue JSON::ParserError => e
     log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
@@ -337,11 +349,14 @@ audio_files.each do |audio_file|
   end
 end
 
+detected_language = track_results.filter_map { |r| r[:language] }.first
+
 merged = {
   'meeting_id'   => meeting_id,
   'generated_at' => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
   'tracks'       => track_results.map { |r| { 'file' => r[:file], 'segments' => r[:segments] } }
 }
+merged['language'] = detected_language if detected_language
 
 File.write(OUTPUT_JSON, JSON.pretty_generate(merged))
 log(logger, :info, "Written: #{OUTPUT_JSON}")

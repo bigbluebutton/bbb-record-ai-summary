@@ -111,9 +111,9 @@ module MarkdownConverter
     html = escape_html(html)
 
     # Convert headers (must be done before other formatting)
-    html = html.gsub(/^### (.+)$/m, '<h3>\1</h3>')
-    html = html.gsub(/^## (.+)$/m, '<h2>\1</h2>')
-    html = html.gsub(/^# (.+)$/m, '<h1>\1</h1>')
+    html = html.gsub(/^### (.+)$/, '<h3>\1</h3>')
+    html = html.gsub(/^## (.+)$/, '<h2>\1</h2>')
+    html = html.gsub(/^# (.+)$/, '<h1>\1</h1>')
 
     # Convert horizontal rules
     html = html.gsub(/^---+$/, '<hr>')
@@ -352,7 +352,9 @@ module Extractors
       @word_count = words.length
       logger.info("Extracted notes: #{@word_count} words")
 
-      text_content.empty? ? nil : text_content
+      return nil if html_content.empty?
+
+      { plain_text: text_content, html: html_content }
     end
   end
 
@@ -519,7 +521,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized }
+      { plain: plain_text, diarized: diarized, language: json_data['language'] }
     end
 
     private
@@ -539,7 +541,7 @@ module Extractors
     def self.merge_and_format_transcript(segments, recording_start, logger)
       return '' if segments.empty?
 
-      lines = ['WEBVTT', '']
+      cues = []
 
       current_speaker_id   = nil
       current_speaker_name = nil
@@ -555,8 +557,8 @@ module Extractors
         )
 
         if (speaker_changed || cue_too_long) && !current_texts.empty?
-          emit_cues(lines, current_speaker_name, current_texts.join(' '),
-                    cue_start, cue_end, recording_start)
+          collect_cues(cues, current_speaker_name, current_texts.join(' '),
+                       cue_start, cue_end, recording_start)
           current_texts = []
           cue_start     = nil
         end
@@ -572,24 +574,33 @@ module Extractors
       end
 
       unless current_texts.empty?
-        emit_cues(lines, current_speaker_name, current_texts.join(' '),
-                  cue_start, cue_end, recording_start)
+        collect_cues(cues, current_speaker_name, current_texts.join(' '),
+                     cue_start, cue_end, recording_start)
       end
 
-      logger.info("Generated WebVTT with #{lines.count { |l| l.include?('-->') }} cues")
+      cues.sort_by! { |c| c[:start_ms] }
+
+      lines = ['WEBVTT', '']
+      cues.each do |cue|
+        lines << "#{format_timestamp(cue[:start_ms])} --> #{format_timestamp(cue[:end_ms])}"
+        lines << "#{cue[:speaker]}: #{cue[:text]}"
+        lines << ''
+      end
+
+      logger.info("Generated WebVTT with #{cues.size} cues")
       lines.join("\n")
     end
 
-    # Emit one or more VTT cues, splitting long text at sentence boundaries
-    def self.emit_cues(lines, speaker_name, full_text, abs_start, abs_end, recording_start)
+    # Collect one or more VTT cues into the array, splitting long text at sentence boundaries
+    def self.collect_cues(cues, speaker_name, full_text, abs_start, abs_end, recording_start)
       text = full_text.strip
       return if text.empty?
 
       if text.length <= MAX_CUE_CHARS
-        lines << "#{format_timestamp(abs_start - recording_start)} --> " \
-                 "#{format_timestamp(abs_end - recording_start)}"
-        lines << "#{speaker_name}: #{text}"
-        lines << ''
+        cues << { start_ms: abs_start - recording_start,
+                  end_ms:   abs_end   - recording_start,
+                  speaker:  speaker_name,
+                  text:     text }
         return
       end
 
@@ -615,10 +626,10 @@ module Extractors
         cue_abs_start = abs_start + (total_duration * char_ratio_start).to_i
         cue_abs_end   = abs_start + (total_duration * char_ratio_end).to_i
 
-        lines << "#{format_timestamp(cue_abs_start - recording_start)} --> " \
-                 "#{format_timestamp(cue_abs_end - recording_start)}"
-        lines << "#{speaker_name}: #{group_text.strip}"
-        lines << ''
+        cues << { start_ms: cue_abs_start - recording_start,
+                  end_ms:   cue_abs_end   - recording_start,
+                  speaker:  speaker_name,
+                  text:     group_text.strip }
 
         group_start_chars  += current_group_chars
         current_group        = []
@@ -723,7 +734,7 @@ module Extractors
       lines.join("\n\n")
     end
 
-    def self.extract(notes_content, transcript, target_dir, logger, polls: nil)
+    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil)
       # Build structured prompt with clear section labels
       sections = []
       sections << "SHARED NOTES:\n#{notes_content}" if notes_content && !notes_content.empty?
@@ -738,7 +749,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger)
+        llm_client = LLMClient::Base.create(logger, language: language)
       rescue StandardError => e
         raise "Failed to initialize LLM client: #{e.message}"
       end
@@ -764,7 +775,7 @@ module Extractors
   end
 
   class ActionItemsExtractor
-    def self.extract(summary, transcript, target_dir, logger, polls: nil)
+    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil)
       # Build input for LLM
       sections = []
       sections << "MEETING SUMMARY:\n#{summary}" if summary && !summary.empty?
@@ -780,7 +791,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger)
+        llm_client = LLMClient::Base.create(logger, language: language)
       rescue StandardError => e
         logger.warn("Failed to initialize LLM client for action items: #{e.message}")
         return []
@@ -997,6 +1008,8 @@ unless FileTest.directory?(target_dir)
     # Initialize notes extractor and extract content
     notes_extractor = Extractors::NotesExtractor.new
     notes_content = notes_extractor.extract(raw_archive_dir, method(:html_to_plain_text), BigBlueButton.logger)
+    notes_plain_text = notes_content&.fetch(:plain_text)
+    notes_html_content = notes_content&.fetch(:html)
     word_count = notes_extractor.word_count
 
     # Extract all other data using extractors
@@ -1007,16 +1020,17 @@ unless FileTest.directory?(target_dir)
     polls = Extractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
 
     # Handle transcript format (can be string or hash with plain/diarized)
-    transcript_plain = transcript.is_a?(Hash) ? transcript[:plain] : transcript
+    transcript_plain    = transcript.is_a?(Hash) ? transcript[:plain]    : transcript
     transcript_diarized = transcript.is_a?(Hash) ? transcript[:diarized] : nil
+    transcript_language = transcript.is_a?(Hash) ? transcript[:language] : nil
 
     transcript_cues = WebVTTParser.parse(transcript_diarized)
 
-    summary = Extractors::SummaryExtractor.extract(notes_content, transcript_plain, target_dir, BigBlueButton.logger, polls: polls)
+    summary = Extractors::SummaryExtractor.extract(notes_plain_text, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language)
 
     # Collect all data for template
     md_template_data = {
-      notes_content: notes_content,
+      notes_content: notes_plain_text,
       word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
@@ -1037,11 +1051,11 @@ unless FileTest.directory?(target_dir)
 
     # Extract action items using LLM
     action_items = Extractors::ActionItemsExtractor.extract(
-      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls
+      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language
     )
 
-    # Convert notes content to HTML
-    notes_html = MarkdownConverter.convert(notes_content)
+    # Use the pre-extracted HTML notes content directly
+    notes_html = notes_html_content
 
     # Convert summary markdown to HTML for structured rendering
     summary_html = summary && !summary.empty? ? MarkdownConverter.convert(summary) : nil

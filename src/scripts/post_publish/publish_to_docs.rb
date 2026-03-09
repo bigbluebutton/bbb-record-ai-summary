@@ -125,26 +125,43 @@ def check!(response, step, logger)
   exit 1
 end
 
-logger.info('Step 1: Obtaining Keycloak access token...')
+def fetch_keycloak_access_token(keycloak_host, realm, client_id, client_secret, logger)
+  logger.info('Obtaining Keycloak access token...')
 
-token_uri = URI.parse("https://#{keycloak_host}/realms/#{realm}/protocol/openid-connect/token")
-token_req = Net::HTTP::Post.new(token_uri.request_uri)
-token_req['Content-Type'] = 'application/x-www-form-urlencoded'
-token_req.body = URI.encode_www_form(
-  client_id:     client_id,
-  client_secret: client_secret,
-  grant_type:    'client_credentials',
-  scope:         'openid email'
-)
+  token_uri = URI.parse("https://#{keycloak_host}/realms/#{realm}/protocol/openid-connect/token")
+  token_req = Net::HTTP::Post.new(token_uri.request_uri)
+  token_req['Content-Type'] = 'application/x-www-form-urlencoded'
+  token_req.body = URI.encode_www_form(
+    client_id:     client_id,
+    client_secret: client_secret,
+    grant_type:    'client_credentials',
+    scope:         'openid email'
+  )
 
-token_res = http_for(token_uri).request(token_req)
-check!(token_res, 'Keycloak token request', logger)
+  token_res = http_for(token_uri).request(token_req)
+  check!(token_res, 'Keycloak token request', logger)
 
-access_token = JSON.parse(token_res.body)['access_token']
-if access_token.nil? || access_token.empty?
-  logger.error('Keycloak response did not include an access_token')
-  exit 1
+  access_token = JSON.parse(token_res.body)['access_token']
+  if access_token.nil? || access_token.empty?
+    logger.error('Keycloak response did not include an access_token')
+    exit 1
+  end
+
+  access_token
 end
+
+def get_access_token(meeting_metadata, keycloak_host, realm, client_id, client_secret, logger)
+  meta_token = meeting_metadata['la-suite-numerique-docs-access-token'].to_s
+  unless meta_token.empty?
+    logger.info('Using access token from meta_la-suite-numerique-docs-access-token.')
+    return meta_token
+  end
+
+  fetch_keycloak_access_token(keycloak_host, realm, client_id, client_secret, logger)
+end
+
+logger.info('Step 1: Obtaining access token...')
+access_token = get_access_token(meeting_metadata, keycloak_host, realm, client_id, client_secret, logger)
 logger.info('Access token obtained.')
 
 logger.info('Step 2: Uploading markdown as temporary document...')

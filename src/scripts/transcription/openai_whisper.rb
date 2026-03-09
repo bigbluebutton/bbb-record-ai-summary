@@ -188,5 +188,7 @@ segments = (data['segments'] || []).filter_map do |seg|
   }
 end
 
-File.write(output_json, JSON.pretty_generate('transcription' => segments))
+output = { 'transcription' => segments }
+output['language'] = data['language'] if data['language']
+File.write(output_json, JSON.pretty_generate(output))
 info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"
