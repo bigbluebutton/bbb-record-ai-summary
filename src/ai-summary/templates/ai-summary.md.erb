@@ -30,7 +30,21 @@
 ---
 
 <% end %>
-<% if @transcript_diarized && !@transcript_diarized.empty? %>
+<% if @discussion_timeline && !@discussion_timeline.empty? %>
+## Discussion
+
+<% @discussion_timeline.each do |item| %>
+<% if item[:type] == :transcript %>
+**[<%= item[:display_time] %>] <%= item[:speaker] %>:** <%= item[:text] %>
+
+<% elsif item[:type] == :chat %>
+**[<%= item[:display_time] %>] <%= item[:sender] %> [chat]:** <%= item[:message] %>
+
+<% end %>
+<% end %>
+---
+
+<% elsif @transcript_diarized && !@transcript_diarized.empty? %>
 ## Audio Transcription (Speaker-Labeled)
 
 <% @transcript_diarized.each do |cue| %>

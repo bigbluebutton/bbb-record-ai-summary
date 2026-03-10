@@ -347,12 +347,12 @@ module Extractors
       html_content = File.read(notes_html_file)
       text_content = html_to_plain_text_method.call(html_content)
 
+      return nil if text_content.strip.empty?
+
       # Count words
       words = text_content.split(/\s+/)
       @word_count = words.length
       logger.info("Extracted notes: #{@word_count} words")
-
-      return nil if html_content.empty?
 
       { plain_text: text_content, html: html_content }
     end
@@ -521,7 +521,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized, language: json_data['language'] }
+      { plain: plain_text, diarized: diarized, language: json_data['language'], recording_start: recording_start }
     end
 
     private
@@ -734,13 +734,26 @@ module Extractors
       lines.join("\n\n")
     end
 
-    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil)
+    def self.format_chat_timestamp(ms)
+      ms = [ms, 0].max
+      total_seconds = ms / 1000
+      hours   = total_seconds / 3600
+      minutes = (total_seconds % 3600) / 60
+      seconds = total_seconds % 60
+      hours > 0 ? format('%d:%02d:%02d', hours, minutes, seconds) : format('%d:%02d', minutes, seconds)
+    end
+
+    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil, chat: nil)
       # Build structured prompt with clear section labels
       sections = []
       sections << "SHARED NOTES:\n#{notes_content}" if notes_content && !notes_content.empty?
       sections << "AUDIO TRANSCRIPT:\n#{transcript}" if transcript && !transcript.empty?
       polls_text = polls_to_text(polls)
       sections << "POLL RESULTS:\n#{polls_text}" if polls_text
+      if chat && !chat.empty?
+        chat_lines = chat.map { |m| "[#{format_chat_timestamp(m[:timestamp_ms])}] #{m[:sender]}: #{m[:message]}" }
+        sections << "CHAT MESSAGES:\n#{chat_lines.join("\n")}"
+      end
       combined_text = sections.join("\n\n")
 
       return nil if combined_text.empty?
@@ -775,13 +788,17 @@ module Extractors
   end
 
   class ActionItemsExtractor
-    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil)
+    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil, chat: nil)
       # Build input for LLM
       sections = []
       sections << "MEETING SUMMARY:\n#{summary}" if summary && !summary.empty?
       sections << "TRANSCRIPT:\n#{transcript}" if transcript && !transcript.empty?
       polls_text = SummaryExtractor.polls_to_text(polls)
       sections << "POLL RESULTS:\n#{polls_text}" if polls_text
+      if chat && !chat.empty?
+        chat_lines = chat.map { |m| "[#{SummaryExtractor.format_chat_timestamp(m[:timestamp_ms])}] #{m[:sender]}: #{m[:message]}" }
+        sections << "CHAT MESSAGES:\n#{chat_lines.join("\n")}"
+      end
       combined_text = sections.join("\n\n")
 
       # Return empty array if no content
@@ -868,6 +885,57 @@ module Extractors
       []
     end
   end
+
+  class ChatExtractor
+    # Event names used across different BBB versions for public chat messages
+    CHAT_EVENT_NAMES = %w[GroupChatMessageBroadcastEvent PublicChatEvent].freeze
+
+    def self.extract(events_doc, recording_start_ms, logger)
+      # Build userId → display name map
+      user_names = {}
+      events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |event|
+        user_id = event.at_xpath('userId')&.text.to_s.strip
+        name    = event.at_xpath('name')&.text.to_s.strip
+        user_names[user_id] = name unless user_id.empty? || name.empty?
+      end
+
+      messages = []
+
+      CHAT_EVENT_NAMES.each do |event_name|
+        events_doc.xpath("//event[@eventname='#{event_name}']").each do |event|
+          sender_id     = event.at_xpath('senderId')&.text.to_s.strip
+          timestamp_utc = event.at_xpath('timestampUTC')&.text.to_i
+          raw_message   = event.at_xpath('message')&.text.to_s
+
+          next if sender_id.empty? || timestamp_utc == 0
+
+          plain_message = strip_html(raw_message).strip
+          next if plain_message.empty?
+
+          messages << {
+            timestamp_ms: timestamp_utc - recording_start_ms,
+            sender:       user_names[sender_id] || sender_id,
+            message:      plain_message
+          }
+        end
+      end
+
+      # Deduplicate identical messages that may appear in both event types
+      messages.uniq! { |m| [m[:sender], m[:message], m[:timestamp_ms]] }
+      messages.sort_by! { |m| m[:timestamp_ms] }
+
+      logger.info("Extracted #{messages.size} public chat message(s)")
+      messages
+    end
+
+    private
+
+    def self.strip_html(html)
+      # Nokogiri decodes XML entities when reading .text, so raw_message may
+      # contain literal HTML tags (e.g. "<p>hello</p>"). Strip them to plain text.
+      html.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+    end
+  end
 end
 
 # Helper method to convert HTML to plain text
@@ -886,18 +954,24 @@ def html_to_plain_text(html_content)
   text.strip
 end
 
+# Convert a VTT timestamp string "HH:MM:SS.mmm" to milliseconds
+def vtt_timestamp_to_ms(ts)
+  return 0 if ts.nil? || ts.empty?
+  parts = ts.split(':')
+  return 0 unless parts.length == 3
+  hours   = parts[0].to_i
+  minutes = parts[1].to_i
+  sec_ms  = parts[2].split('.')
+  seconds = sec_ms[0].to_i
+  millis  = (sec_ms[1] || '0').to_i
+  (hours * 3_600_000) + (minutes * 60_000) + (seconds * 1_000) + millis
+end
+
 # Helper method to render markdown using ERB template
 def render_markdown_into_template(template_path, data)
   template_content = File.read(template_path, encoding: 'utf-8')
   erb = ERB.new(template_content, trim_mode: '-')
-
-  # Create a binding with instance variables for ERB
-  template_binding = binding
-  data.each { |key, value| template_binding.local_variable_set(key, value) }
-
-  # Set instance variables for ERB template access
   data.each { |key, value| instance_variable_set("@#{key}", value) }
-
   erb.result(binding)
 end
 
@@ -977,6 +1051,8 @@ else
   format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary.yml"))
 end
 
+include_chat_in_discussion = format_props.fetch('include_chat_in_discussion', true)
+
 # Set up paths
 recording_dir = props['recording_dir']
 raw_archive_dir = "#{recording_dir}/raw/#{meeting_id}"
@@ -1026,9 +1102,68 @@ unless FileTest.directory?(target_dir)
 
     transcript_cues = WebVTTParser.parse(transcript_diarized)
 
-    summary = Extractors::SummaryExtractor.extract(notes_plain_text, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language)
+    # Determine recording start time for chat relative timestamps
+    recording_start_ms = transcript.is_a?(Hash) ? transcript[:recording_start] : nil
+    recording_start_ms ||= Extractors::TranscriptExtractor.extract_recording_start_time(
+      events_doc, BigBlueButton.logger
+    )
 
-    # Collect all data for template
+    # Extract public chat messages
+    chat_messages = if recording_start_ms
+      Extractors::ChatExtractor.extract(events_doc, recording_start_ms, BigBlueButton.logger)
+    else
+      BigBlueButton.logger.warn("Skipping chat extraction: could not determine recording_start_ms")
+      []
+    end
+
+    summary = Extractors::SummaryExtractor.extract(
+      notes_plain_text, transcript_plain, target_dir, BigBlueButton.logger,
+      polls: polls, language: transcript_language, chat: chat_messages
+    )
+
+    # Extract action items using LLM
+    action_items = Extractors::ActionItemsExtractor.extract(
+      summary, transcript_plain, target_dir, BigBlueButton.logger,
+      polls: polls, language: transcript_language, chat: chat_messages
+    )
+
+    # Build merged discussion timeline (transcript cues + chat messages) sorted by time
+    discussion_timeline = []
+    if include_chat_in_discussion
+      transcript_cues.each do |cue|
+        discussion_timeline << {
+          type:         :transcript,
+          timestamp_ms: vtt_timestamp_to_ms(cue[:start]),
+          display_time: cue[:start],
+          start:        cue[:start],
+          end:          cue[:end],
+          speaker:      cue[:speaker],
+          text:         cue[:text]
+        }
+      end
+
+      chat_messages.each do |msg|
+        ms = [msg[:timestamp_ms], 0].max
+        total_s = ms / 1000
+        h = total_s / 3600; m = (total_s % 3600) / 60; s = total_s % 60
+        display = format('%02d:%02d:%02d.%03d', h, m, s, ms % 1000)
+        discussion_timeline << {
+          type:         :chat,
+          timestamp_ms: msg[:timestamp_ms],
+          display_time: display,
+          sender:       msg[:sender],
+          message:      msg[:message]
+        }
+      end
+
+      discussion_timeline.sort_by! { |item| item[:timestamp_ms] }
+      BigBlueButton.logger.info(
+        "Built discussion timeline: #{discussion_timeline.size} items " \
+        "(#{transcript_cues.size} transcript cues + #{chat_messages.size} chat messages)"
+      )
+    end
+
+    # Collect all data for markdown template
     md_template_data = {
       notes_content: notes_plain_text,
       word_count: word_count,
@@ -1036,7 +1171,8 @@ unless FileTest.directory?(target_dir)
       transcript: transcript_plain,
       transcript_diarized: transcript_cues,
       polls: polls,
-      summary: summary
+      summary: summary,
+      discussion_timeline: discussion_timeline
     }
 
     # Render markdown from ERB template
@@ -1048,14 +1184,6 @@ unless FileTest.directory?(target_dir)
 
     # Generate HTML report
     BigBlueButton.logger.info("Rendering ai-summary.html from template")
-
-    # Extract action items using LLM
-    action_items = Extractors::ActionItemsExtractor.extract(
-      summary, transcript_plain, target_dir, BigBlueButton.logger, polls: polls, language: transcript_language
-    )
-
-    # Use the pre-extracted HTML notes content directly
-    notes_html = notes_html_content
 
     # Convert summary markdown to HTML for structured rendering
     summary_html = summary && !summary.empty? ? MarkdownConverter.convert(summary) : nil
@@ -1073,11 +1201,12 @@ unless FileTest.directory?(target_dir)
       transcript_title: "Speaker-Labeled Transcript",
       transcript_open: true,
       timestamps_note: "Timestamps relative to recording start.",
-      shared_notes: notes_html,
+      shared_notes: notes_html_content,
       polls: polls,
       summary: summary,
       summary_html: summary_html,
       action_items: action_items,
+      discussion_timeline: discussion_timeline,
       footer: "Generated by BigBlueButton Notes processor. Optimized for print and dark/light mode."
     }
 
