@@ -971,14 +971,7 @@ end
 def render_markdown_into_template(template_path, data)
   template_content = File.read(template_path, encoding: 'utf-8')
   erb = ERB.new(template_content, trim_mode: '-')
-
-  # Create a binding with instance variables for ERB
-  template_binding = binding
-  data.each { |key, value| template_binding.local_variable_set(key, value) }
-
-  # Set instance variables for ERB template access
   data.each { |key, value| instance_variable_set("@#{key}", value) }
-
   erb.result(binding)
 end
 
@@ -1058,11 +1051,7 @@ else
   format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary.yml"))
 end
 
-# Read LLM config directly for feature flags (LLMClient::Base raises outside production)
-BBB_CORE_DIR = '/usr/local/bigbluebutton/core'.freeze
-llm_config_path = "#{BBB_CORE_DIR}/lib/ai-summary/llm.yml"
-llm_config = File.exist?(llm_config_path) ? YAML.safe_load(File.read(llm_config_path)) : {}
-include_chat_in_discussion = llm_config.fetch('include_chat_in_discussion', false)
+include_chat_in_discussion = format_props.fetch('include_chat_in_discussion', true)
 
 # Set up paths
 recording_dir = props['recording_dir']
@@ -1196,9 +1185,6 @@ unless FileTest.directory?(target_dir)
     # Generate HTML report
     BigBlueButton.logger.info("Rendering ai-summary.html from template")
 
-    # Use the pre-extracted HTML notes content directly
-    notes_html = notes_html_content
-
     # Convert summary markdown to HTML for structured rendering
     summary_html = summary && !summary.empty? ? MarkdownConverter.convert(summary) : nil
 
@@ -1215,7 +1201,7 @@ unless FileTest.directory?(target_dir)
       transcript_title: "Speaker-Labeled Transcript",
       transcript_open: true,
       timestamps_note: "Timestamps relative to recording start.",
-      shared_notes: notes_html,
+      shared_notes: notes_html_content,
       polls: polls,
       summary: summary,
       summary_html: summary_html,
