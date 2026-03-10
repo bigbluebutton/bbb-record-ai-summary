@@ -347,12 +347,12 @@ module Extractors
       html_content = File.read(notes_html_file)
       text_content = html_to_plain_text_method.call(html_content)
 
+      return nil if text_content.strip.empty?
+
       # Count words
       words = text_content.split(/\s+/)
       @word_count = words.length
       logger.info("Extracted notes: #{@word_count} words")
-
-      return nil if html_content.empty?
 
       { plain_text: text_content, html: html_content }
     end
