@@ -39,6 +39,14 @@ albert:
 # When omitted, the system prompt below instructs the LLM to detect the language automatically.
 # language: 'en'
 
+# Include public chat messages in the Discussion section of the HTML report.
+# When true, a "Discussion" tab is rendered that interleaves audio transcript cues
+# and chat messages in chronological order — useful when participants answer in chat
+# what was said in audio, or vice versa.
+# Chat is always included in the LLM prompt for summary/action-item context regardless
+# of this setting.
+include_chat_in_discussion: false
+
 # System prompt for summarization
 system_prompt: |
   You are summarizing a BigBlueButton meeting. You will receive the shared notes
