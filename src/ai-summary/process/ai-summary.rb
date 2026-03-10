@@ -1132,27 +1132,6 @@ unless FileTest.directory?(target_dir)
       polls: polls, language: transcript_language, chat: chat_messages
     )
 
-    # Collect all data for template
-    md_template_data = {
-      notes_content: notes_plain_text,
-      word_count: word_count,
-      attendees: attendees,
-      transcript: transcript_plain,
-      transcript_diarized: transcript_cues,
-      polls: polls,
-      summary: summary
-    }
-
-    # Render markdown from ERB template
-    BigBlueButton.logger.info("Rendering ai-summary.md from template")
-    template_path = "#{playback_dir}/ai-summary.md.erb"
-    notes_md_content = render_markdown_into_template(template_path, md_template_data)
-    File.write("#{target_dir}/ai-summary.md", notes_md_content)
-    BigBlueButton.logger.info("Created ai-summary.md with #{word_count} words and #{attendees.length} attendees")
-
-    # Generate HTML report
-    BigBlueButton.logger.info("Rendering ai-summary.html from template")
-
     # Extract action items using LLM
     action_items = Extractors::ActionItemsExtractor.extract(
       summary, transcript_plain, target_dir, BigBlueButton.logger,
@@ -1194,6 +1173,28 @@ unless FileTest.directory?(target_dir)
         "(#{transcript_cues.size} transcript cues + #{chat_messages.size} chat messages)"
       )
     end
+
+    # Collect all data for markdown template
+    md_template_data = {
+      notes_content: notes_plain_text,
+      word_count: word_count,
+      attendees: attendees,
+      transcript: transcript_plain,
+      transcript_diarized: transcript_cues,
+      polls: polls,
+      summary: summary,
+      discussion_timeline: discussion_timeline
+    }
+
+    # Render markdown from ERB template
+    BigBlueButton.logger.info("Rendering ai-summary.md from template")
+    template_path = "#{playback_dir}/ai-summary.md.erb"
+    notes_md_content = render_markdown_into_template(template_path, md_template_data)
+    File.write("#{target_dir}/ai-summary.md", notes_md_content)
+    BigBlueButton.logger.info("Created ai-summary.md with #{word_count} words and #{attendees.length} attendees")
+
+    # Generate HTML report
+    BigBlueButton.logger.info("Rendering ai-summary.html from template")
 
     # Use the pre-extracted HTML notes content directly
     notes_html = notes_html_content
