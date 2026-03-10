@@ -34,6 +34,7 @@ require 'json'
 require 'logger'
 require 'fileutils'
 require 'securerandom'
+require 'nokogiri'
 
 opts = Optimist::options do
   opt :meeting_id, 'Meeting ID',                          type: String
@@ -91,6 +92,12 @@ meeting_metadata = BigBlueButton::Events.get_meeting_metadata("#{raw_dir}/events
 parent_id    = meeting_metadata['bbb-docs-document-id'].to_s
 meeting_name = (meeting_metadata['meetingName'] || meeting_metadata['name']).to_s
 meeting_name = 'Meeting Summary' if meeting_name.empty?
+
+events_doc       = Nokogiri::XML(File.read("#{raw_dir}/events.xml"))
+start_ts_ms      = events_doc.at_xpath('//event/timestampUTC')&.text.to_i
+meeting_start    = Time.at(start_ts_ms / 1000.0).utc
+meeting_date_str = "(#{meeting_start.strftime('%Y-%m-%d %H:%M:%S %Z')})"
+document_title   = "#{meeting_name} #{meeting_date_str}"
 
 if parent_id.empty?
   logger.info('meta_bbb-docs-document-id not set for this meeting — skipping docs upload.')
@@ -208,7 +215,7 @@ child_uri = URI.parse("#{docs_host}/api/v1.0/documents/#{parent_id}/children/")
 child_req = Net::HTTP::Post.new(child_uri.request_uri)
 child_req['Authorization'] = "Bearer #{access_token}"
 child_req['Content-Type']  = 'application/json'
-child_req.body             = JSON.generate({ title: meeting_name, content: doc_content })
+child_req.body             = JSON.generate({ title: document_title, content: doc_content })
 
 child_res = http_for(child_uri).request(child_req)
 check!(child_res, 'Child document creation', logger)
