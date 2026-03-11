@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 This repository implements the **`ai-summary`** recording playback format for BigBlueButton (BBB). It plugs into the standard BBB recording pipeline and adds AI-powered features: audio transcription via whisper.cpp, speaker-labeled WebVTT output, LLM-generated meeting summaries, and action item extraction.
 
-Source code lives in `src/`. The only shell script at the project root is `deploy.sh`, which copies everything to a production BBB server.
+Source code lives in `src/`. Shell scripts at the project root (`deploy.sh`, `deploy_transcription.sh`) copy everything to a production BBB server.
 
 ## Directory Structure
 
@@ -19,13 +19,21 @@ bbb-playback-ai/
 │   │   ├── lib/llm_client.rb           # Multi-provider LLM abstraction
 │   │   ├── templates/
 │   │   │   ├── ai-summary.md.erb       # Markdown output template
-│   │   │   └── ai-summary.html.erb     # HTML output template
+│   │   │   ├── ai-summary.html.erb     # HTML output template
+│   │   │   └── ai-summary.json.erb     # JSON output template
 │   │   ├── ai-summary.yml              # Format config (publish_dir, playback_dir, format)
 │   │   ├── llm.yml                     # LLM config — gitignored in production
-│   │   └── llm.yml.example             # Template for llm.yml
+│   │   ├── llm.yml.example             # Template for llm.yml
+│   │   ├── docs.yml                    # La Suite Numérique Docs config — gitignored
+│   │   └── docs.yml.example            # Template for docs.yml
 │   └── scripts/
-│       └── post_archive/
-│           └── transcribe_audio.rb     # Post-archive audio transcription hook
+│       ├── post_archive/
+│       │   └── transcribe_audio.rb     # Post-archive audio transcription hook
+│       ├── post_publish/
+│       │   └── publish_to_docs.rb      # Post-publish hook: publishes to La Suite Numérique Docs
+│       └── transcription/
+│           ├── openai_whisper.rb       # OpenAI Whisper API provider
+│           └── albert_whisper.rb       # Albert (French gov) API provider
 ├── ai-summary-playback.nginx           # Nginx location block
 ├── recording/                          # Test workspace (gitignored)
 ├── logs/                               # Processing logs (gitignored)
@@ -40,12 +48,15 @@ This project adds:
 - A **post_archive hook** (after Archive): `transcribe_audio.rb` — transcribes all audio tracks
 - A **process stage**: `process/ai-summary.rb` — extracts and renders all meeting data
 - A **publish stage**: `publish/ai-summary.rb` — converts to PDF, finalizes metadata, copies to publish dir
+- A **post_publish hook** (optional): `publish_to_docs.rb` — publishes the AI summary to La Suite Numérique Docs
 
 ## Deployment
 
 ```bash
-./deploy.sh           # deploy to production BBB (requires root, auto-elevates with sudo)
-./deploy.sh --dry-run # preview without writing files
+./deploy.sh                              # deploy to production BBB (requires root, auto-elevates with sudo)
+./deploy.sh --dry-run                    # preview without writing files
+./deploy_transcription.sh openai_whisper # deploy OpenAI Whisper transcription provider
+./deploy_transcription.sh albert_whisper # deploy Albert Whisper transcription provider
 ```
 
 After deployment, wire `ai-summary` into the pipeline in `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
@@ -84,6 +95,7 @@ All extractors are defined **inline in `process/ai-summary.rb`** under the `Extr
 | `TranscriptExtractor` | Reads pre-computed `transcription.json`; generates WebVTT and plain text |
 | `SummaryExtractor` | LLM-generated summary from notes + transcript |
 | `ActionItemsExtractor` | LLM-extracted action items as `[{owner:, label:, status:}]` |
+| `ChatExtractor` | Chat messages from `GroupChatMessageBroadcastEvent`/`PublicChatEvent` in events.xml |
 
 ### TranscriptExtractor
 
@@ -110,7 +122,7 @@ Template path is resolved from `playback_dir` in `ai-summary.yml` (production: `
 Key operations:
 1. Parses meeting ID: strips `-ai-summary` suffix via `delete_suffix` (not a simple last-hyphen split, because the format name contains a hyphen)
 2. Early exit if format is not `ai-summary`
-3. Converts `ai-summary.md` to PDF with `pandoc --pdf-engine=pdflatex` (falls back to original PDF)
+3. Converts `ai-summary.md` to PDF with `pandoc --pdf-engine=xelatex` (falls back to original PDF)
 4. Updates `metadata.xml` with `state="published"`, playback link, duration
 5. Copies files to final publish dir (`/var/bigbluebutton/published/ai-summary/<meeting_id>/`)
 6. Cleans up process and publish staging dirs
@@ -122,8 +134,8 @@ Key operations:
 **Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
 
 Transcription back-end selection (priority order):
-1. **Custom script** — `transcribe.sh` placed alongside this script (called as `transcribe.sh <audio_file> <output_json>`)
-2. **whisper.cpp** — fallback, searches multiple known paths; converts audio to 16 kHz WAV via ffmpeg
+1. **Provider Ruby script** — `transcribe.rb` deployed to transcription lib dir via `deploy_transcription.sh` (supports `openai_whisper` and `albert_whisper`)
+2. **whisper.cpp** — built-in fallback, searches multiple known paths; converts audio to 16 kHz WAV via ffmpeg
 
 If `transcription.json` already exists, the script exits early (delete it to re-run).
 
@@ -144,6 +156,7 @@ Factory pattern: `LLMClient::Base.create(logger)` returns the right client.
 |---|---|
 | `ClaudeClient` | Anthropic API, default model `claude-3-5-sonnet-20241022` |
 | `OpenAIClient` | OpenAI API, default model `gpt-4o-mini` |
+| `AlbertClient` | Albert (French government) API |
 | `DisabledClient` | No-op, returns nil |
 
 **LLM summarization is production-only** — the client raises an error when `__dir__` is outside `/usr/local/bigbluebutton/core`. Config is read from `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
@@ -151,6 +164,7 @@ Factory pattern: `LLMClient::Base.create(logger)` returns the right client.
 Environment variables take priority over config file values:
 - `ANTHROPIC_API_KEY` for Claude
 - `OPENAI_API_KEY` for OpenAI
+- `ALBERT_API_KEY` for Albert
 
 ## Config Loading
 

@@ -29,7 +29,7 @@ openai:
 
 # Albert Configuration (albert.api.etalab.gouv.fr — French government API)
 albert:
-  model: 'AgentPublic/llama3-instruct-8b'  # check available models at albert.api.etalab.gouv.fr
+  model: 'openai/gpt-oss-120b'  # check available models at albert.api.etalab.gouv.fr
   max_tokens: 1024
   temperature: 0.7
 
