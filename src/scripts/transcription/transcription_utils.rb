@@ -5,11 +5,13 @@
 #
 # Splits a BBB audio file into per-speech chunks using talking cues from events.xml,
 # so each provider (albert_whisper, openai_whisper, …) can process them independently.
+# Optionally filters silent chunks via Voice Activity Detection (VAD) before returning.
 #
 # Usage:
 #   require_relative 'transcription_utils'
 #
-#   result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml)
+#   result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
+#              vad: { enabled: true, threshold: 0.05 })
 #   # result is nil on audio conversion failure
 #   # result[:chunks] is empty when no speech cues are found
 #
@@ -28,7 +30,45 @@ require 'securerandom'
 require 'fileutils'
 
 module TranscriptionUtils
-  MERGE_GAP_MS = 1_000
+  MERGE_GAP_MS = 2_000
+
+  # ---------------------------------------------------------------------------
+  # VAD constants
+  # ---------------------------------------------------------------------------
+
+  # VAD is only run on clips shorter than this (longer clips are assumed speech).
+  VAD_MAX_DURATION_MS = 10_000
+  # Minimum absolute speech duration (ms) required for a clip to pass VAD.
+  # The adaptive threshold is VAD_MIN_SPEECH_MS / clip_duration_ms, floored at
+  # the configured speech_threshold. Keeps short clips from passing on just a
+  # few noise frames while avoiding an overly strict threshold on longer clips.
+  VAD_MIN_SPEECH_MS   = 150
+  VAD_NODE_PATH       = `npm root -g 2>/dev/null`.strip.freeze
+
+  # Inline Node.js script that runs node-vad on a 16 kHz mono WAV file and
+  # prints the fraction of 30 ms frames classified as VOICE to stdout.
+  # Requires: npm install -g node-vad
+  VAD_INLINE_JS = <<~'JS'
+    const VAD = require('node-vad');
+    const fs  = require('fs');
+    const SAMPLE_RATE = 16000, FRAME_BYTES = 960, WAV_HEADER = 44;
+    async function run() {
+      const pcm = fs.readFileSync(process.env.VAD_WAV).slice(WAV_HEADER);
+      const vad = new VAD(VAD.Mode.VERY_AGGRESSIVE);
+      let total = 0, speech = 0;
+      for (let i = 0; i + FRAME_BYTES <= pcm.length; i += FRAME_BYTES) {
+        const event = await vad.processAudio(pcm.slice(i, i + FRAME_BYTES), SAMPLE_RATE);
+        total++;
+        if (event === VAD.Event.VOICE) speech++;
+      }
+      process.stdout.write((total > 0 ? speech / total : 0).toFixed(4) + '\n');
+    }
+    run().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
+  JS
+
+  # ---------------------------------------------------------------------------
+  # Public methods
+  # ---------------------------------------------------------------------------
 
   # Returns audio duration in milliseconds via ffprobe, or nil on failure.
   def self.audio_duration_ms(path)
@@ -36,6 +76,50 @@ module TranscriptionUtils
     out.empty? ? nil : (out.to_f * 1000).round
   rescue
     nil
+  end
+
+  # Returns true if the WAV file at wav_path contains enough speech to be worth
+  # transcribing, false otherwise.
+  #
+  # Options:
+  #   enabled:        (Bool)  — when false, always returns true (VAD disabled)
+  #   threshold:      (Float) — minimum speech-frame ratio (0.0–1.0); default 0.05
+  #   min_speech_ms:  (Int)   — minimum absolute speech duration in ms; default VAD_MIN_SPEECH_MS
+  #   max_duration_ms:(Int)   — clips longer than this skip VAD and pass through; default VAD_MAX_DURATION_MS
+  #   force:          (Bool)  — run VAD even when enabled is false (used for hallucination re-checks)
+  def self.has_speech?(wav_path, enabled:, threshold: 0.05,
+                       min_speech_ms: VAD_MIN_SPEECH_MS, max_duration_ms: VAD_MAX_DURATION_MS,
+                       force: false)
+    return true unless enabled || force
+
+    duration_ms = audio_duration_ms(wav_path).to_i
+    return true if !force && duration_ms > max_duration_ms
+
+    # Adaptive threshold: for short clips a fixed percentage can mean only a few
+    # milliseconds of speech (e.g. 5% of 600 ms = 30 ms — humanly impossible).
+    # Derive the threshold from the minimum absolute speech duration, floored at
+    # the configured base threshold so long clips aren't penalized.
+    adaptive = if duration_ms > 0
+      [[min_speech_ms.to_f / duration_ms, threshold].max, 0.80].min
+    else
+      threshold
+    end
+
+    env = { 'VAD_WAV' => wav_path }
+    env['NODE_PATH'] = VAD_NODE_PATH unless VAD_NODE_PATH.empty?
+    out = IO.popen(env, ['node', '-e', VAD_INLINE_JS], &:read)
+    status = $?
+    unless status.success?
+      log_info "  → VAD: node failed (is node-vad installed globally?), passing through"
+      return true
+    end
+
+    ratio = out.strip.to_f
+    log_info "  → VAD: #{(ratio * 100).round(1)}% speech frames (threshold: #{(adaptive * 100).round(1)}%)"
+    ratio >= adaptive
+  rescue => e
+    log_info "  → VAD error: #{e.message}, passing through"
+    true
   end
 
   # Converts audio to 16 kHz mono WAV required by whisper-based APIs.
@@ -166,6 +250,15 @@ module TranscriptionUtils
 
   # Prepares all audio chunks for a given audio file and events.xml.
   #
+  # Options:
+  #   merge_gap_ms: (Int)  — merge talking cues closer than this; default MERGE_GAP_MS
+  #   vad:          (Hash) — VAD options applied to each chunk before it is returned:
+  #                            enabled:         (Bool)  default false
+  #                            threshold:       (Float) default 0.05
+  #                            min_speech_ms:   (Int)   default VAD_MIN_SPEECH_MS
+  #                            max_duration_ms: (Int)   default VAD_MAX_DURATION_MS
+  #                          Chunks that fail VAD are deleted and excluded from the result.
+  #
   # Returns a hash:
   #   {
   #     work_file:  String,   # path to the (possibly converted) WAV file
@@ -176,9 +269,14 @@ module TranscriptionUtils
   #
   # Returns nil if audio conversion fails.
   # Returns a result with chunks: [] if no speech cues are found (silent audio).
-  def self.prepare_audio_chunks(audio_file, events_xml, merge_gap_ms: MERGE_GAP_MS)
+  def self.prepare_audio_chunks(audio_file, events_xml, merge_gap_ms: MERGE_GAP_MS, vad: {})
     work_file, temp_wav = convert_to_wav(audio_file)
     return nil if work_file.nil?
+
+    vad_enabled         = vad.fetch(:enabled, false)
+    vad_threshold       = vad.fetch(:threshold, 0.05).to_f
+    vad_min_speech_ms   = vad.fetch(:min_speech_ms, VAD_MIN_SPEECH_MS).to_i
+    vad_max_duration_ms = vad.fetch(:max_duration_ms, VAD_MAX_DURATION_MS).to_i
 
     events_doc = Nokogiri::XML(File.read(events_xml))
     raw_cues   = extract_talking_cues(events_doc, audio_file)
@@ -200,15 +298,26 @@ module TranscriptionUtils
 
     chunks = []
     cues.each_with_index do |cue, i|
-      from_ms  = cue['from']
+      # Pull the chunk start back by 1 second to avoid clipping the first word,
+      # clamped to 0 so we never request a negative offset.
+      from_ms  = [cue['from'] - 1_000, 0].max
       to_ms    = cue['to']
       out_path = File.join(chunks_dir, format('chunk_%04d.wav', i))
       path     = cut_audio_chunk(work_file, from_ms, to_ms, out_path)
-      if path
-        chunks << { path: path, from_ms: from_ms, to_ms: to_ms }
-      else
+
+      unless path
         log_info "  → ffmpeg cut failed for cue #{i + 1}, skipping"
+        next
       end
+
+      unless has_speech?(path, enabled: vad_enabled, threshold: vad_threshold,
+                         min_speech_ms: vad_min_speech_ms, max_duration_ms: vad_max_duration_ms)
+        log_info "  → VAD: insufficient speech in chunk #{i + 1}, skipping"
+        File.delete(path)
+        next
+      end
+
+      chunks << { path: path, from_ms: from_ms, to_ms: to_ms }
     end
 
     { work_file: work_file, temp_wav: temp_wav, chunks_dir: chunks_dir, chunks: chunks }

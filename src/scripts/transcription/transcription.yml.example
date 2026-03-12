@@ -16,31 +16,31 @@
 # Leave blank for auto-detection.
 # language: "fr"
 
+# Voice Activity Detection — filters out chunks with little or no detected speech
+# before sending them to the API, preventing hallucinations on keyboard noise,
+# static, and other non-speech audio. Applies to all transcription backends.
+# Requires node-vad: run  npm install -g node-vad  before enabling.
+vad:
+  enabled: false
+
+  # Minimum absolute speech duration (ms) a clip must contain to pass VAD.
+  # The effective threshold is derived as min_speech_ms / clip_duration_ms,
+  # so short clips require a higher speech ratio than long ones.
+  min_speech_ms: 150
+
+  # Floor threshold: even for long clips, at least this fraction of 30 ms
+  # frames must be classified as VOICE. Prevents long silences from passing.
+  speech_threshold: 0.065   # 0.0–1.0
+
+  # Clips longer than this (ms) skip VAD entirely and are always transcribed.
+  max_duration_ms: 10000
+
 albert:
   api_key: "your-albert-api-key-here"
 
   # ASR model to use (optional). Leave blank to let the API choose.
   # Call GET /v1/models to list available automatic-speech-recognition models.
   # model: "openai/whisper-large-v3"
-
-  # Voice Activity Detection — filters out clips with little or no detected speech
-  # before sending them to Albert, preventing hallucinations on keyboard noise,
-  # static, and other non-speech audio.
-  # Requires node-vad: run  npm install -g node-vad  before enabling.
-  vad:
-    enabled: false
-
-    # Minimum absolute speech duration (ms) a clip must contain to pass VAD.
-    # The effective threshold is derived as min_speech_ms / clip_duration_ms,
-    # so short clips require a higher speech ratio than long ones.
-    min_speech_ms: 150
-
-    # Floor threshold: even for long clips, at least this fraction of 30 ms
-    # frames must be classified as VOICE. Prevents long silences from passing.
-    speech_threshold: 0.065   # 0.0–1.0
-
-    # Clips longer than this (ms) skip VAD entirely and are always transcribed.
-    max_duration_ms: 10000
 
 openai:
   api_key: "your-openai-api-key-here"

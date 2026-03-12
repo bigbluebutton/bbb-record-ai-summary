@@ -16,9 +16,12 @@
 #   transcribe.rb <audio_file> <output_json_file> <events_xml_file>
 #
 # Configuration (transcription.yml in the same directory, or production path):
-#   albert_api_key: "your-key-here"
-#   albert_model:   "openai/whisper-large-v3"  # optional; defaults to "openai/whisper-large-v3"
-#   language:       "fr"                       # optional; ISO-639-1 code; omit for auto-detection
+#   albert:
+#     api_key: "your-key-here"
+#     model:   "openai/whisper-large-v3"  # optional
+#   language: "fr"                        # optional; ISO-639-1; omit for auto-detection
+#   vad:
+#     enabled: true                       # optional; requires node-vad
 #
 # Environment variables override config file:
 #   ALBERT_API_KEY
@@ -46,16 +49,8 @@ require_relative 'transcription_utils'
 BASE_URL       = 'https://albert.api.etalab.gouv.fr'.freeze
 ENDPOINT_PATH  = '/v1/audio/transcriptions'.freeze
 
-# VAD is only run on clips shorter than this (longer clips are assumed speech).
-VAD_MAX_DURATION_MS = 10_000
-# Minimum absolute speech duration (ms) required for a clip to pass VAD.
-# The adaptive threshold is VAD_MIN_SPEECH_MS / clip_duration_ms, floored at the
-# configured vad_speech_threshold. Keeps short clips from passing on just a
-# few noise frames while avoiding an overly strict threshold on longer clips.
-VAD_MIN_SPEECH_MS   = 150
-# If Albert returns this many words or fewer, re-run VAD regardless of clip length.
+# If Albert returns this many words or fewer, re-run VAD to detect hallucinations.
 MIN_TRANSCRIPTION_WORDS = 3
-VAD_NODE_PATH       = `npm root -g 2>/dev/null`.strip.freeze
 
 # Helpers
 def die(msg)
@@ -81,60 +76,6 @@ def text_field(boundary, name, value)
   "--#{boundary}\r\n" \
   "Content-Disposition: form-data; name=\"#{name}\"\r\n\r\n" \
   "#{value}\r\n"
-end
-
-# Requires: npm install -g node-vad
-VAD_INLINE_JS = <<~'JS'
-  const VAD = require('node-vad');
-  const fs  = require('fs');
-  const SAMPLE_RATE = 16000, FRAME_BYTES = 960, WAV_HEADER = 44;
-  async function run() {
-    const pcm = fs.readFileSync(process.env.VAD_WAV).slice(WAV_HEADER);
-    const vad = new VAD(VAD.Mode.VERY_AGGRESSIVE);
-    let total = 0, speech = 0;
-    for (let i = 0; i + FRAME_BYTES <= pcm.length; i += FRAME_BYTES) {
-      const event = await vad.processAudio(pcm.slice(i, i + FRAME_BYTES), SAMPLE_RATE);
-      total++;
-      if (event === VAD.Event.VOICE) speech++;
-    }
-    process.stdout.write((total > 0 ? speech / total : 0).toFixed(4) + '\n');
-  }
-  run().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
-JS
-
-def has_speech?(wav_path, enabled:, threshold: 0.05,
-                min_speech_ms: VAD_MIN_SPEECH_MS, max_duration_ms: VAD_MAX_DURATION_MS,
-                force: false)
-  return true unless enabled || force
-
-  duration_ms = TranscriptionUtils.audio_duration_ms(wav_path).to_i
-  return true if !force && duration_ms > max_duration_ms
-
-  # Adaptive threshold: for short clips a fixed percentage can mean only a few
-  # milliseconds of speech (e.g. 5% of 600 ms = 30 ms — humanly impossible).
-  # Derive the threshold from the minimum absolute speech duration, floored at
-  # the configured base threshold so long clips aren't penalized.
-  adaptive = if duration_ms > 0
-    [[min_speech_ms.to_f / duration_ms, threshold].max, 0.80].min
-  else
-    threshold
-  end
-
-  env = { 'VAD_WAV' => wav_path }
-  env['NODE_PATH'] = VAD_NODE_PATH unless VAD_NODE_PATH.empty?
-  out = IO.popen(env, ['node', '-e', VAD_INLINE_JS], &:read)
-  status = $?
-  unless status.success?
-    info "  → VAD: node failed (is node-vad installed globally?), passing through"
-    return true
-  end
-
-  ratio = out.strip.to_f
-  info "  → VAD: #{(ratio * 100).round(1)}% speech frames (threshold: #{(adaptive * 100).round(1)}%)"
-  ratio >= adaptive
-rescue => e
-  info "  → VAD error: #{e.message}, passing through"
-  true
 end
 
 # Posts wav_path to the Albert API. Returns cleaned text or nil.
@@ -247,7 +188,7 @@ if yml_path
 end
 
 albert_cfg = config['albert'] || {}
-vad_cfg    = albert_cfg['vad'] || {}
+vad_cfg    = config['vad']    || {}
 
 api_key = ENV['ALBERT_API_KEY'].to_s.strip
 api_key = albert_cfg['api_key'].to_s.strip if api_key.empty?
@@ -265,14 +206,17 @@ if language.empty?
 end
 language = nil if language.empty?
 
-vad_enabled       = vad_cfg['enabled'] == true
-vad_threshold     = (vad_cfg['speech_threshold'] || 0.05).to_f
-vad_min_speech_ms = (vad_cfg['min_speech_ms']    || VAD_MIN_SPEECH_MS).to_i
-vad_max_duration_ms = (vad_cfg['max_duration_ms'] || VAD_MAX_DURATION_MS).to_i
+vad_opts = {
+  enabled:         vad_cfg['enabled'] == true,
+  threshold:       (vad_cfg['speech_threshold'] || 0.05).to_f,
+  min_speech_ms:   (vad_cfg['min_speech_ms']    || TranscriptionUtils::VAD_MIN_SPEECH_MS).to_i,
+  max_duration_ms: (vad_cfg['max_duration_ms']  || TranscriptionUtils::VAD_MAX_DURATION_MS).to_i,
+}
 
-# Prepare audio chunks
+# Prepare audio chunks (VAD filtering applied inside)
 result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
-                                                 merge_gap_ms: TranscriptionUtils::MERGE_GAP_MS)
+                                                 merge_gap_ms: TranscriptionUtils::MERGE_GAP_MS,
+                                                 vad: vad_opts)
 die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
 
 info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
@@ -312,12 +256,6 @@ http.start do |conn|
     chunk   = chunk_info[:path]
     info "Chunk #{i + 1}/#{chunks.size}: #{from_ms}ms – #{to_ms}ms"
 
-    unless has_speech?(chunk, enabled: vad_enabled, threshold: vad_threshold,
-                       min_speech_ms: vad_min_speech_ms, max_duration_ms: vad_max_duration_ms)
-      info "  → VAD: insufficient speech, skipping"
-      next
-    end
-
     text = call_albert(chunk, api_key, model, language, conn)
 
     unless text
@@ -328,11 +266,15 @@ http.start do |conn|
     word_count = text.split.size
     info "  → #{word_count} word(s)"
 
+    # Re-check with VAD when Albert returns suspiciously few words — likely a
+    # hallucination on a clip that slipped through (e.g. VAD disabled or long clip).
     if word_count <= MIN_TRANSCRIPTION_WORDS
       info "  → few words, re-checking with VAD..."
-      unless has_speech?(chunk, enabled: true, threshold: vad_threshold,
-                         min_speech_ms: vad_min_speech_ms, max_duration_ms: vad_max_duration_ms,
-                         force: true)
+      unless TranscriptionUtils.has_speech?(chunk, enabled: true,
+                                            threshold: vad_opts[:threshold],
+                                            min_speech_ms: vad_opts[:min_speech_ms],
+                                            max_duration_ms: vad_opts[:max_duration_ms],
+                                            force: true)
         info "  → VAD: no speech on re-check, skipping (likely hallucination)"
         next
       end

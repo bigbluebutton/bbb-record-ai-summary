@@ -140,6 +140,7 @@ if File.exist?(TRANSCRIPTION_YML)
   info "Loaded config from #{TRANSCRIPTION_YML}"
 end
 openai_cfg = config['openai'] || {}
+vad_cfg    = config['vad']    || {}
 
 api_key = ENV['OPENAI_API_KEY'].to_s.strip
 api_key = openai_cfg['api_key'].to_s.strip if api_key.empty?
@@ -150,11 +151,18 @@ language = ENV['OPENAI_LANGUAGE'].to_s.strip
 language = config['language'].to_s.strip if language.empty?
 language = nil if language.empty?
 
+vad_opts = {
+  enabled:         vad_cfg['enabled'] == true,
+  threshold:       (vad_cfg['speech_threshold'] || 0.05).to_f,
+  min_speech_ms:   (vad_cfg['min_speech_ms']    || TranscriptionUtils::VAD_MIN_SPEECH_MS).to_i,
+  max_duration_ms: (vad_cfg['max_duration_ms']  || TranscriptionUtils::VAD_MAX_DURATION_MS).to_i,
+}
+
 # ---------------------------------------------------------------------------
-# Prepare audio chunks via events.xml
+# Prepare audio chunks via events.xml (VAD filtering applied inside)
 # ---------------------------------------------------------------------------
 
-result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml)
+result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml, vad: vad_opts)
 die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
 
 info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
