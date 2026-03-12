@@ -1,5 +1,5 @@
 #!/bin/sh -e
 . /usr/share/debconf/confmodule
 
-db_input medium bbb-record-ai-summary/transcription-backend || true
+db_input high bbb-record-ai-summary/transcription-backend || true
 db_go

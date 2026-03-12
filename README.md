@@ -132,7 +132,7 @@ steps:
 ### Step 6 — Restart the recording worker
 
 ```bash
-systemctl restart bbb-rap-resque-worker
+sudo systemctl restart bbb-rap-resque-worker
 ```
 
 ---
@@ -212,7 +212,7 @@ steps:
 ### Step 4 — Restart the recording worker
 
 ```bash
-systemctl restart bbb-rap-resque-worker
+sudo systemctl restart bbb-rap-resque-worker
 ```
 
 ### Step 5 — (Recommended) Deploy a back-end transcription provider
