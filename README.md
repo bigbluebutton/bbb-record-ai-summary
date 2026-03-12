@@ -15,7 +15,129 @@ After a BBB meeting is recorded, this format adds:
 - **HTML report** — a standalone, print-ready HTML page with dark/light mode and an embedded transcript viewer
 - **Markdown + PDF** — the report is also available as Markdown and converted to PDF via pandoc
 
-## Deployment
+## Installation (Debian package)
+
+> This is the recommended installation method. The `deploy.sh` approach (described further below) is intended for development and testing.
+
+Before installing, keep in mind that this integration only works with LiveKit. See the [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) for setup details.
+
+### Step 1 — Install the package
+
+```bash
+sudo apt install ./bbb-record-ai-summary_0.1.0_all.deb
+```
+
+`apt` will pull in all required dependencies (`pandoc`, `texlive-xetex`, etc.) automatically. During installation you will be prompted to choose a transcription backend (`openai_whisper` or `albert_whisper`). This selection can be changed later:
+
+```bash
+sudo dpkg-reconfigure bbb-record-ai-summary
+```
+
+To pre-seed the answer for automated/scripted installs:
+
+```bash
+echo "bbb-record-ai-summary bbb-record-ai-summary/transcription-backend select albert_whisper" \
+  | sudo debconf-set-selections
+sudo apt install ./bbb-record-ai-summary_0.1.0_all.deb
+```
+
+### Step 2 — Configure the LLM provider
+
+The package installs a starter config at:
+
+```
+/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml
+```
+
+Edit it and set your provider and API key:
+
+```yaml
+provider: 'claude'            # 'claude', 'openai', 'albert', or 'disabled'
+anthropic_api_key: 'sk-...'  # or set ANTHROPIC_API_KEY env var
+```
+
+Set `provider: 'disabled'` to skip LLM summarization entirely.
+
+### Step 3 — Configure the transcription backend
+
+The package creates a starter config at:
+
+```
+/usr/local/bigbluebutton/core/lib/transcription/transcription.yml
+```
+
+Edit it and fill in the API key for your chosen backend:
+
+```yaml
+# For openai_whisper:
+openai:
+  api_key: 'sk-...'
+
+# For albert_whisper:
+albert:
+  api_key: '...'
+```
+
+### Step 4 — (Optional) Configure Docs publishing
+
+To automatically publish AI summaries to [La Suite Numérique Docs](https://lasuite.numerique.gouv.fr/) after each meeting, edit:
+
+```
+/usr/local/bigbluebutton/core/lib/ai-summary/docs.yml
+```
+
+Fill in your Keycloak OIDC client credentials. If this file is absent or unconfigured, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
+
+```
+meta_bbb-docs-document-id=<parent-document-uuid>
+```
+
+### Step 5 — (Optional) Install whisper.cpp for local fallback transcription
+
+If you prefer not to use a cloud API, you can install whisper.cpp locally. The transcription hook will use it automatically when no `transcribe.rb` provider is active.
+
+```bash
+# Install build dependencies
+sudo apt install build-essential git cmake ffmpeg
+
+# Clone and build
+sudo git clone https://github.com/ggerganov/whisper.cpp.git /usr/local/bin/whisper.cpp
+sudo make -C /usr/local/bin/whisper.cpp -j$(nproc)
+
+# Download the base model (~150 MB)
+sudo bash /usr/local/bin/whisper.cpp/models/download-ggml-model.sh base
+```
+
+To switch back to the local fallback after having used a cloud provider:
+
+```bash
+sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
+```
+
+### Step 6 — Wire the recording pipeline
+
+Edit `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
+
+```yaml
+steps:
+  archive: "sanity"
+  sanity: "captions"
+  captions:
+    - "process:presentation"
+    - "process:ai-summary"
+  "process:presentation": "publish:presentation"
+  "process:ai-summary": "publish:ai-summary"
+```
+
+### Step 6 — Restart the recording worker
+
+```bash
+systemctl restart bbb-rap-resque-worker
+```
+
+---
+
+## Deployment from source (deploy.sh)
 
 Previous to all deployment and configuration, keep in mind that this integration will only work with Livekit. See [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) to better understand how to configure it.
 

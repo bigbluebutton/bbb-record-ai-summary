@@ -1,0 +1,11 @@
+Template: bbb-record-ai-summary/transcription-backend
+Type: select
+Choices: openai_whisper, albert_whisper
+Default: openai_whisper
+Description: Transcription backend to activate
+ Choose which transcription backend will be used as the active provider
+ (installed as transcribe.rb). Both scripts are installed — you can
+ switch later by running: dpkg-reconfigure bbb-record-ai-summary
+ .
+ openai_whisper: OpenAI Whisper API (requires OpenAI API key).
+ albert_whisper: Albert API — French government LLM (requires Albert API key).
