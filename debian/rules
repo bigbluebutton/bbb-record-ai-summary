@@ -26,6 +26,8 @@ override_dh_auto_install:
 
 	# Transcription backends (postinst symlinks the chosen one as transcribe.rb)
 	install -d debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription
+	install -m 644 src/scripts/transcription/transcription_utils.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/transcription_utils.rb
 	install -m 755 src/scripts/transcription/openai_whisper.rb \
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb
 	install -m 755 src/scripts/transcription/albert_whisper.rb \

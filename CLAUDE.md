@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -33,7 +33,8 @@ bbb-playback-ai/
 │       │   └── publish_to_docs.rb      # Post-publish hook: publishes to La Suite Numérique Docs
 │       └── transcription/
 │           ├── openai_whisper.rb       # OpenAI Whisper API provider
-│           └── albert_whisper.rb       # Albert (French gov) API provider
+│           ├── albert_whisper.rb       # Albert (French gov) API provider
+│           └── transcription_utils.rb  # Shared: audio chunking from events.xml talking cues
 ├── ai-summary-playback.nginx           # Nginx location block
 ├── recording/                          # Test workspace (gitignored)
 ├── logs/                               # Processing logs (gitignored)
@@ -49,6 +50,21 @@ This project adds:
 - A **process stage**: `process/ai-summary.rb` — extracts and renders all meeting data
 - A **publish stage**: `publish/ai-summary.rb` — converts to PDF, finalizes metadata, copies to publish dir
 - A **post_publish hook** (optional): `publish_to_docs.rb` — publishes the AI summary to La Suite Numérique Docs
+
+## Building the Debian Package
+
+```bash
+./build.sh                  # runs dpkg-buildpackage -us -uc -b; outputs ../bbb-record-ai-summary_*.deb
+./dch_version.sh            # prints DCH_VERSION=<debian-compatible version> derived from git tags
+```
+
+`dch_version.sh` converts semver git tags (e.g. `v1.2.0-rc.1`) to Debian version strings (e.g. `1.2.0~rc1`). It handles `alpha`, `beta`, and `rc` pre-release qualifiers and appends `.postN+gHASH` for untagged commits.
+
+The `debian/` directory uses standard debhelper. `debian/rules` installs all source files to the correct production paths. `debian/postinst`:
+- Creates `/var/bigbluebutton/published/ai-summary/`, log dir, and staging publish dir
+- Copies `llm.yml.example`, `docs.yml.example`, and `transcription.yml.example` to their final locations if they don't already exist
+- Prompts (via debconf) for the transcription backend (`openai_whisper` or `albert_whisper`) and symlinks the chosen one as `transcribe.rb`
+- To switch backends post-install: `dpkg-reconfigure bbb-record-ai-summary`
 
 ## Deployment
 
@@ -134,10 +150,30 @@ Key operations:
 **Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
 
 Transcription back-end selection (priority order):
-1. **Provider Ruby script** — `transcribe.rb` deployed to transcription lib dir via `deploy_transcription.sh` (supports `openai_whisper` and `albert_whisper`)
+1. **Provider Ruby script** — `transcribe.rb` in the transcription lib dir (production: `/usr/local/bigbluebutton/core/lib/transcription/`, dev: `src/scripts/transcription/`). Deploy via `deploy_transcription.sh` or debconf selection. Both `openai_whisper.rb` and `albert_whisper.rb` are installed; the chosen one is symlinked as `transcribe.rb`.
 2. **whisper.cpp** — built-in fallback, searches multiple known paths; converts audio to 16 kHz WAV via ffmpeg
 
+`transcription.yml` (alongside `transcribe.rb`) configures the active backend. API keys can be set via `ALBERT_API_KEY`/`OPENAI_API_KEY` env vars (take priority) or in the YAML.
+
 If `transcription.json` already exists, the script exits early (delete it to re-run).
+
+### Transcription Provider Interface
+
+Both `openai_whisper.rb` and `albert_whisper.rb` are called as:
+```
+transcribe.rb <audio_file> <output_json_file> <events_xml_file>
+```
+
+Both share `transcription_utils.rb` (same directory) for chunk preparation:
+- Converts audio to 16 kHz mono WAV via ffmpeg
+- Extracts `ParticipantTalkingEvent` cues from `events.xml` to find speech intervals
+- Falls back to `AudioTrackPublished/Unpublished` floor intervals if no talking events
+- Merges cues with gap ≤ `MERGE_GAP_MS = 1000ms`, then cuts one WAV chunk per merged cue
+- Returns `{ work_file:, temp_wav:, chunks_dir:, chunks: [{path:, from_ms:, to_ms:}] }`
+
+**Albert provider** (`albert_whisper.rb`): reads language from `meta_recording-transcription-language` in `metadata.xml` (adjacent to events.xml), then from `transcription.yml`, then env. Supports optional Voice Activity Detection (VAD via `node-vad`) to skip silent chunks; short transcriptions (≤ 3 words) trigger a forced VAD re-check to filter hallucinations. Config nested under `albert:` key in `transcription.yml`.
+
+**OpenAI provider** (`openai_whisper.rb`): enforces 25 MB per-chunk limit; filters segments using a quality score derived from `no_speech_prob` and `compression_ratio` (threshold 0.4); uses `verbose_json` response format with segment-level timestamps. Config nested under `openai:` key in `transcription.yml`.
 
 Output format:
 ```json

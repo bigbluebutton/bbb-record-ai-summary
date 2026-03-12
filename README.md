@@ -276,21 +276,25 @@ Provider scripts live in `src/scripts/transcription/`. Each script is a self-con
 | File | Provider | Notes |
 |---|---|---|
 | `openai_whisper.rb` | OpenAI Whisper API (`whisper-1`) | Requires an OpenAI project with audio access |
+| `albert_whisper.rb` | Albert API (French gov, `openai/whisper-large-v3`) | Supports optional VAD via `node-vad` |
+
+Both providers use `transcription_utils.rb` to split audio into per-speech chunks derived from `events.xml` talking cues before sending to the API.
 
 **Deploying a provider:**
 
 ```bash
 ./deploy_transcription.sh openai_whisper   # deploy the OpenAI Whisper provider
+./deploy_transcription.sh albert_whisper   # deploy the Albert provider
 ./deploy_transcription.sh openai_whisper --dry-run  # preview without writing
 ```
 
-This copies `src/scripts/transcription/openai_whisper.rb` to:
+This copies `src/scripts/transcription/<provider>.rb` to:
 
 ```
 /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
 ```
 
-and makes it executable. To revert to the whisper.cpp fallback, remove that file:
+and also copies `transcription_utils.rb` to the same directory, then makes `transcribe.rb` executable. To revert to the whisper.cpp fallback, remove that file:
 
 ```bash
 sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
@@ -301,14 +305,15 @@ sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
 ```bash
 sudo ruby /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb \
   /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
-  /tmp/test_transcription.json
+  /tmp/test_transcription.json \
+  /var/bigbluebutton/recording/raw/<meeting_id>/events.xml
 ```
 
 ### Writing a custom provider
 
 A provider script must:
 
-1. Accept two positional arguments: `<audio_file>` and `<output_json_file>`
+1. Accept three positional arguments: `<audio_file>`, `<output_json_file>`, and `<events_xml_file>`
 2. Write a JSON file at `<output_json_file>` with this structure:
 
 ```json
@@ -321,6 +326,16 @@ A provider script must:
 
 Timestamps (`from` / `to`) are in **milliseconds**. Place the script in `src/scripts/transcription/<name>.rb` and deploy it with `deploy_transcription.sh <name>`.
 
+You can use `transcription_utils.rb` in your own script to get the same audio chunking logic as the bundled providers:
+
+```ruby
+require_relative 'transcription_utils'
+
+result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml)
+result[:chunks].each { |chunk| ... }  # chunk[:path], chunk[:from_ms], chunk[:to_ms]
+TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
+```
+
 ### API key configuration
 
 Provider scripts read their API key from (in priority order):
@@ -330,8 +345,14 @@ Provider scripts read their API key from (in priority order):
 
 ```yaml
 # /usr/local/bigbluebutton/core/lib/transcription/transcription.yml
-openai_api_key: 'sk-...'   # for openai_whisper
-# albert_api_key: '...'    # for albert_whisper
+
+# For openai_whisper:
+openai:
+  api_key: 'sk-...'
+
+# For albert_whisper:
+albert:
+  api_key: '...'
 ```
 
 ### Output format

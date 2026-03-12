@@ -61,14 +61,15 @@ Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `w
 
 **Transcription back-end (priority order):**
 
-1. **Custom script** — if `transcribe.sh` exists alongside `transcribe_audio.rb` and is executable, it is called as:
+1. **Provider script** — if `transcribe.rb` exists in the transcription lib dir (`/usr/local/bigbluebutton/core/lib/transcription/`), it is called as:
    ```
-   transcribe.sh <audio_file> <output_json_file>
+   transcribe.rb <audio_file> <output_json_file> <events_xml_file>
    ```
-   The script must produce a JSON file with a `"transcription"` array of segment objects:
+   The script must produce a JSON file at `<output_json_file>` with this structure:
    ```json
-   [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }]
+   { "transcription": [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }] }
    ```
+   Both bundled providers (`openai_whisper.rb`, `albert_whisper.rb`) use `transcription_utils.rb` to split the audio into per-speech chunks via `events.xml` talking cues before sending to the API.
 
 2. **whisper.cpp fallback** — the binary is located by scanning a list of known paths. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`. The `-oj` flag produces segment-level JSON output.
 
@@ -325,6 +326,9 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
 | File | Source | Deployed To |
 |---|---|---|
 | `transcribe_audio.rb` | `src/scripts/post_archive/` | `.../scripts/post_archive/` |
+| `transcription_utils.rb` | `src/scripts/transcription/` | `.../lib/transcription/` |
+| `openai_whisper.rb` | `src/scripts/transcription/` | `.../lib/transcription/` |
+| `albert_whisper.rb` | `src/scripts/transcription/` | `.../lib/transcription/` |
 | `process/ai-summary.rb` | `src/ai-summary/process/` | `.../scripts/process/` |
 | `publish/ai-summary.rb` | `src/ai-summary/publish/` | `.../scripts/publish/` |
 | `llm_client.rb` | `src/ai-summary/lib/` | `.../lib/ai-summary/` |

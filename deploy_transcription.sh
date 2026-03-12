@@ -88,11 +88,13 @@ echo ""
 if $DRY_RUN; then
   echo "[dry-run] mkdir -p $TRANSCRIPTION_LIB_DIR"
   echo "[dry-run] cp $SRC_FILE $DEST_FILE"
+  echo "[dry-run] cp $TRANSCRIPTION_SRC/transcription_utils.rb $TRANSCRIPTION_LIB_DIR"
   [ -f "$TRANSCRIPTION_SRC/transcription.yml" ] && echo "[dry-run] cp $TRANSCRIPTION_SRC/transcription.yml $TRANSCRIPTION_LIB_DIR"
   echo "[dry-run] chmod +x $DEST_FILE"
 else
   mkdir -p "$TRANSCRIPTION_LIB_DIR"
   cp "$SRC_FILE" "$DEST_FILE"
+  cp "$TRANSCRIPTION_SRC/transcription_utils.rb" "$TRANSCRIPTION_LIB_DIR/transcription_utils.rb"
   if [ -f "$TRANSCRIPTION_SRC/transcription.yml" ]; then
     cp "$TRANSCRIPTION_SRC/transcription.yml" "$TRANSCRIPTION_LIB_DIR"
   fi

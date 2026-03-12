@@ -131,25 +131,35 @@ sudo cp src/ai-summary/llm.yml /usr/local/bigbluebutton/core/lib/ai-summary/llm.
 
 ## Use a Custom Transcription Back-end
 
-Place an executable `transcribe.sh` next to `transcribe_audio.rb` on the server:
+Place a Ruby script named `transcribe.rb` in the transcription lib dir and make it executable:
 
 ```bash
-sudo nano /usr/local/bigbluebutton/core/scripts/post_archive/transcribe.sh
-sudo chmod +x /usr/local/bigbluebutton/core/scripts/post_archive/transcribe.sh
+sudo nano /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
+sudo chmod +x /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
 ```
 
-The script receives two arguments:
+The script receives three arguments:
+```ruby
+#!/usr/bin/env ruby
+audio_file  = ARGV[0]  # path to the audio track
+output_json = ARGV[1]  # path to write output JSON
+events_xml  = ARGV[2]  # path to events.xml (for talking cues / timestamps)
+
+# Call your transcription service and write output to output_json.
+# Output must be valid JSON:
+# { "transcription": [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }] }
+```
+
+If `transcribe.rb` exists and is executable, whisper.cpp is not used.
+
+To deploy one of the bundled providers instead:
+
 ```bash
-#!/bin/bash
-audio_file="$1"
-output_json="$2"
-
-# Call your transcription service here and write output to $output_json
-# Output must be valid JSON with a "transcription" array:
-# [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }]
+./deploy_transcription.sh openai_whisper   # OpenAI Whisper API
+./deploy_transcription.sh albert_whisper   # Albert (French gov) API
 ```
 
-If `transcribe.sh` exists and is executable, whisper.cpp is not used.
+This copies the provider script as `transcribe.rb` and always copies `transcription_utils.rb` alongside it (required by both bundled providers).
 
 ---
 
@@ -158,6 +168,11 @@ If `transcribe.sh` exists and is executable, whisper.cpp is not used.
 | Purpose | Path |
 |---|---|
 | Post-archive script | `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb` |
+| Transcription shared utils | `/usr/local/bigbluebutton/core/lib/transcription/transcription_utils.rb` |
+| Active transcription provider | `/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb` |
+| OpenAI Whisper provider | `/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb` |
+| Albert Whisper provider | `/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb` |
+| Transcription config | `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml` |
 | Process script | `/usr/local/bigbluebutton/core/scripts/process/ai-summary.rb` |
 | Publish script | `/usr/local/bigbluebutton/core/scripts/publish/ai-summary.rb` |
 | LLM client | `/usr/local/bigbluebutton/core/lib/ai-summary/llm_client.rb` |
