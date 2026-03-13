@@ -354,7 +354,13 @@ module Extractors
       @word_count = words.length
       logger.info("Extracted notes: #{@word_count} words")
 
-      { plain_text: text_content, html: html_content }
+      sanitized_html = html_content.gsub(/<style([^>]*)>(.*?)<\/style>/im) do
+        attrs = Regexp.last_match(1)
+        css   = Regexp.last_match(2)
+        css   = css.gsub(/\b(?:html|body)\s*\{[^}]*\}/i, '')
+        css.strip.empty? ? '' : "<style#{attrs}>#{css}</style>"
+      end
+      { plain_text: text_content, html: sanitized_html }
     end
   end
 
@@ -1028,6 +1034,31 @@ def build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
   Nokogiri::XML(metadata.to_xml) { |x| x.noblanks }
 end
 
+# Recursively merges +override+ into +base+, combining nested hashes key-by-key
+# so that only the keys present in +override+ are changed.
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Loads the ai-summary format config from +path+ and applies an optional
+def load_format_config(path)
+  cfg = YAML.safe_load(File.read(path)) || {}
+
+  override_path = '/etc/bigbluebutton/ai-summary.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) || {}
+    cfg = deep_merge_hashes(cfg, override)
+  end
+
+  cfg
+end
+
 # Parse command line options
 opts = Optimist::options do
   opt :meeting_id, "Meeting id to archive", :default => '58f4a6b3-cd07-444d-8564-59116cb53974', :type => String
@@ -1042,13 +1073,13 @@ BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 
 if script_dir.start_with?("#{BBB_SCRIPTS_DIR}")
   # Production: configs live directly in the BBB scripts directory
-  props       = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
-  format_props = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/ai-summary.yml"))
+  props        = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
+  format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
 else
   # Development: configs are in the project root config/ directory
   project_root = File.expand_path('../../..', script_dir)
   props        = YAML.safe_load(File.read("#{project_root}/src/bigbluebutton.yml"))
-  format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary.yml"))
+  format_props = load_format_config("#{project_root}/src/ai-summary.yml")
 end
 
 include_chat_in_discussion = format_props.fetch('include_chat_in_discussion', true)

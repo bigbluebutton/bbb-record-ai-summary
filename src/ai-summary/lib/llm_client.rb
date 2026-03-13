@@ -23,10 +23,37 @@ module LLMClient
       return llm_config_path
     end
 
+    # Recursively merges +override+ into +base+, combining nested hashes
+    # key-by-key so that only the keys present in +override+ are changed.
+    def self.deep_merge_hashes(base, override)
+      base.merge(override) do |_key, base_val, override_val|
+        if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+          deep_merge_hashes(base_val, override_val)
+        else
+          override_val
+        end
+      end
+    end
+
+    # Loads llm.yml from +config_path+ and applies an optional operator override
+    # from /etc/bigbluebutton/ai-summary-llm.yml.
+    def self.load_llm_config(config_path, logger)
+      config = YAML.load_file(config_path)
+
+      override_path = '/etc/bigbluebutton/ai-summary-llm.yml'
+      if File.exist?(override_path)
+        override = YAML.safe_load(File.read(override_path)) || {}
+        config = deep_merge_hashes(config, override)
+        logger.info("Applied LLM config override from #{override_path}")
+      end
+
+      config
+    end
+
     def self.create(logger, language: nil)
       llm_config_path = get_config_path()
 
-      config = YAML.load_file(llm_config_path)
+      config = load_llm_config(llm_config_path, logger)
       provider = config['provider']
       logger.info("LLM provider: #{provider}")
 

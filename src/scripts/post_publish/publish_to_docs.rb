@@ -54,6 +54,36 @@ end
 BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 BBB_LIB_DIR     = '/usr/local/bigbluebutton/core/lib/ai-summary'.freeze
 
+# Recursively merges +override+ into +base+
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Loads docs.yml from +config_path+
+def load_docs_config(config_path, logger)
+  unless File.exist?(config_path)
+    logger.info("docs.yml not found at #{config_path} — skipping docs upload.")
+    return nil
+  end
+
+  cfg = YAML.safe_load(File.read(config_path)) || {}
+
+  override_path = '/etc/bigbluebutton/post-publish-la-suite-numerique-docs.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) || {}
+    cfg = deep_merge_hashes(cfg, override)
+    logger.info("Applied config override from #{override_path}")
+  end
+
+  cfg
+end
+
 bbb_props     = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
 log_dir       = bbb_props['log_dir']       || '/var/log/bigbluebutton'
 recording_dir = bbb_props['recording_dir'] || '/var/bigbluebutton/recording'
@@ -68,12 +98,8 @@ logger.info("Meeting ID : #{meeting_id}")
 logger.info("Format     : #{format_name}")
 
 docs_config_path = "#{BBB_LIB_DIR}/docs.yml"
-unless File.exist?(docs_config_path)
-  logger.info("docs.yml not found at #{docs_config_path} — skipping docs upload.")
-  exit 0
-end
-
-cfg = YAML.safe_load(File.read(docs_config_path))
+cfg = load_docs_config(docs_config_path, logger)
+exit 0 if cfg.nil?
 
 unless cfg.fetch('enabled', true)
   logger.info('docs.yml has enabled: false — skipping docs upload.')
