@@ -34,6 +34,5 @@ debian/bbb-record-ai-summary/
 
 # Configuration (API keys)
 config/llm.yml
-src/ai-summary/llm.yml
-src/ai-summary/docs.yml
-src/scripts/transcription/transcription.yml
+src/ai-summary/ai-summary-override.yml
+src/scripts/transcription/transcription-override.yml

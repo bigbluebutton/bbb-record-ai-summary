@@ -15,6 +15,22 @@ After a BBB meeting is recorded, this format adds:
 - **HTML report** — a standalone, print-ready HTML page with dark/light mode and an embedded transcript viewer
 - **Markdown + PDF** — the report is also available as Markdown and converted to PDF via pandoc
 
+## Building the Debian package
+
+Install the build dependencies first:
+
+```bash
+sudo apt install debhelper po-debconf
+```
+
+Then build:
+
+```bash
+./build.sh
+```
+
+This produces `../bbb-record-ai-summary_*.deb`.
+
 ## Installation (Debian package)
 
 > This is the recommended installation method. The `deploy.sh` approach (described further below) is intended for development and testing.
@@ -43,50 +59,64 @@ sudo apt install ./bbb-record-ai-summary_0.1.0_all.deb
 
 ### Step 2 — Configure the LLM provider
 
-The package installs a starter config at:
+Create an operator override file at:
 
 ```
-/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml
+/etc/bigbluebutton/ai-summary.yml
 ```
 
-Edit it and set your provider and API key:
+Add only the keys you want to set — they will be deep-merged over the package defaults:
 
 ```yaml
-provider: 'claude'            # 'claude', 'openai', 'albert', or 'disabled'
-anthropic_api_key: 'sk-...'  # or set ANTHROPIC_API_KEY env var
+llm:
+  # Provider selection: 'claude', 'openai', 'albert', or 'disabled'
+  provider: albert
+
+  anthropic_api_key: '...'
+  openai_api_key: '...'
+  albert_api_key: '...'
+
+  language: 'en'
 ```
 
 Set `provider: 'disabled'` to skip LLM summarization entirely.
 
 ### Step 3 — Configure the transcription backend
 
-The package creates a starter config at:
+Create an operator override file at:
 
 ```
-/usr/local/bigbluebutton/core/lib/transcription/transcription.yml
+/etc/bigbluebutton/post-archive-transcription.yml
 ```
 
-Edit it and fill in the API key for your chosen backend:
+Add only the API key for your chosen backend:
 
 ```yaml
-# For openai_whisper:
-openai:
-  api_key: 'sk-...'
+language: "en"
 
-# For albert_whisper:
 albert:
-  api_key: '...'
+  api_key: "..."
+
+openai:
+  api_key: "..."
+
 ```
 
 ### Step 4 — (Optional) Configure Docs publishing
 
-To automatically publish AI summaries to [La Suite Numérique Docs](https://lasuite.numerique.gouv.fr/) after each meeting, edit:
+To automatically publish AI summaries to [La Suite Numérique Docs](https://lasuite.numerique.gouv.fr/) after each meeting, add a `docs:` section to `/etc/bigbluebutton/ai-summary.yml`:
 
-```
-/usr/local/bigbluebutton/core/lib/ai-summary/docs.yml
+```yaml
+docs:
+  enabled: true
+  docs_host: https://docs.example.com
+  keycloak_host: id.example.com
+  realm: docs
+  client_id: docs
+  client_secret: 'your-client-secret'
 ```
 
-Fill in your Keycloak OIDC client credentials. If this file is absent or unconfigured, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
+If the `docs:` section is absent or `enabled: false`, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
 
 ```
 meta_bbb-docs-document-id=<parent-document-uuid>
@@ -129,7 +159,7 @@ steps:
   "process:ai-summary": "publish:ai-summary"
 ```
 
-### Step 6 — Restart the recording worker
+### Step 7 — Restart the recording worker
 
 ```bash
 sudo systemctl restart bbb-rap-resque-worker
@@ -141,34 +171,31 @@ sudo systemctl restart bbb-rap-resque-worker
 
 Previous to all deployment and configuration, keep in mind that this integration will only work with Livekit. See [documentation](https://docs.bigbluebutton.org/new-features/#integration-with-livekit) to better understand how to configure it.
 
-### Step 1 — Copy and configure the credential files
+### Step 1 — Configure credentials
 
-Both files below are read by `deploy.sh` and copied to the server. Configure them before running the deploy script.
-
-**LLM provider** (`src/ai-summary/llm.yml`):
+All LLM and Docs settings live in the unified `ai-summary.yml` config. `deploy.sh` copies `src/ai-summary/ai-summary.yml` (safe defaults) to the server. To apply credentials without editing that tracked file, create an operator override on the server after deployment:
 
 ```bash
-cp src/ai-summary/llm.yml.example src/ai-summary/llm.yml
+sudo vi /etc/bigbluebutton/ai-summary.yml
 ```
 
-Edit `src/ai-summary/llm.yml` and properly configure the provider. It will be one of the following:
+Add only the keys you want to override. For example, to enable Claude summarization and Docs publishing:
 
-- disabled;
-- openai;
-- claude;
-- albert;
+```yaml
+llm:
+  provider: 'claude'            # 'claude', 'openai', 'albert', or 'disabled'
+  anthropic_api_key: 'sk-...'  # or set ANTHROPIC_API_KEY env var
 
-Set `provider: 'disabled'` to skip LLM summarization entirely. After deployment this file lives at `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
-
-**Docs publishing** (`src/ai-summary/docs.yml`, optional):
-
-```bash
-cp src/ai-summary/docs.yml.example src/ai-summary/docs.yml
+docs:
+  enabled: true
+  docs_host: https://docs.example.com
+  keycloak_host: id.example.com
+  realm: docs
+  client_id: docs
+  client_secret: 'your-client-secret'
 ```
 
-Edit `src/ai-summary/docs.yml` with your [La Suite Numérique Docs](https://lasuite.numerique.gouv.fr/) Keycloak OIDC client credentials.
-
-If this file is absent, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
+Set `llm.provider: 'disabled'` to skip LLM summarization entirely. If the `docs:` section is absent or `enabled: false`, the post-publish hook skips the upload silently. At meeting creation, also pass the parent document UUID via the BBB `/create` API:
 
 ```
 meta_bbb-docs-document-id=<parent-document-uuid>
@@ -189,7 +216,6 @@ meta_bbb-docs-document-id=<parent-document-uuid>
 | `src/ai-summary/process/ai-summary.rb` | `/usr/local/bigbluebutton/core/scripts/process/` |
 | `src/ai-summary/publish/ai-summary.rb` | `/usr/local/bigbluebutton/core/scripts/publish/` |
 | `src/ai-summary/lib/llm_client.rb` | `/usr/local/bigbluebutton/core/lib/ai-summary/` |
-| `src/ai-summary/llm.yml` | `/usr/local/bigbluebutton/core/lib/ai-summary/` |
 | `src/ai-summary/templates/` | `/usr/local/bigbluebutton/core/playback/ai-summary/` |
 | `src/ai-summary/ai-summary.yml` | `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` |
 | `ai-summary-playback.nginx` | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
@@ -219,11 +245,7 @@ sudo systemctl restart bbb-rap-resque-worker
 
 By default the fallback is a local `whisper.cpp` instance, which works but consumes server CPU. For production use, configure a cloud transcription provider:
 
-```bash
-cp src/scripts/transcription/transcription.yml.example src/scripts/transcription/transcription.yml
-```
-
-Edit `src/scripts/transcription/transcription.yml` and fill in your API key:
+Edit `src/scripts/transcription/transcription-override.yml` and fill in your API key:
 
 ```yaml
 openai_api_key: "sk-..."       # for openai_whisper
@@ -378,19 +400,19 @@ albert:
 
 LLM summarization is **production-only** (the client raises an error when run outside the BBB scripts directory).
 
-Copy the example config and set your provider:
+Configure the provider via the operator override file on the server:
 
 ```bash
-cp src/ai-summary/llm.yml.example src/ai-summary/llm.yml
+sudo vi /etc/bigbluebutton/ai-summary.yml
 ```
 
 ```yaml
-# src/ai-summary/llm.yml
-provider: 'claude'          # 'claude', 'openai', or 'disabled'
-anthropic_api_key: 'sk-...' # or set ANTHROPIC_API_KEY env var
+llm:
+  provider: 'claude'          # 'claude', 'openai', 'albert', or 'disabled'
+  anthropic_api_key: 'sk-...' # or set ANTHROPIC_API_KEY env var
 ```
 
-After deployment, the config lives at `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`.
+The base config (with safe defaults) is at `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`. Keys set in `/etc/bigbluebutton/ai-summary.yml` are deep-merged over it at runtime.
 
 ## Output Files
 

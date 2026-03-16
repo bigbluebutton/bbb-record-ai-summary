@@ -175,17 +175,44 @@ $logger = Logger.new(File.join(log_dir, "post_archive-transcribe-albert-#{meetin
 $logger.level = Logger::INFO
 
 # Config
+
+# Recursively merges +override+ into +base+, combining nested hashes key-by-key
+# so that only the keys present in +override+ are changed.
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Loads transcription.yml from the first existing path in +yml_paths+ and
+def load_transcription_config(yml_paths)
+  config   = {}
+  yml_path = yml_paths.find { |p| File.exist?(p) }
+  if yml_path
+    config = YAML.safe_load(File.read(yml_path)) rescue {}
+    info "Loaded config from #{yml_path}"
+  end
+
+  override_path = '/etc/bigbluebutton/post-archive-transcription.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) rescue {}
+    config = deep_merge_hashes(config, override)
+    info "Applied config override from #{override_path}"
+  end
+
+  config
+end
+
 TRANSCRIPTION_YML_PATHS = [
   '/usr/local/bigbluebutton/core/lib/transcription/transcription.yml',
   File.expand_path('transcription.yml', __dir__),
 ].freeze
 
-config   = {}
-yml_path = TRANSCRIPTION_YML_PATHS.find { |p| File.exist?(p) }
-if yml_path
-  config = YAML.safe_load(File.read(yml_path)) rescue {}
-  info "Loaded config from #{yml_path}"
-end
+config = load_transcription_config(TRANSCRIPTION_YML_PATHS)
 
 albert_cfg = config['albert'] || {}
 vad_cfg    = config['vad']    || {}

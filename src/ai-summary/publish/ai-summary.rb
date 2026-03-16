@@ -28,6 +28,31 @@ require 'builder'
 
 FORMAT_NAME = 'ai-summary'.freeze
 
+# Recursively merges +override+ into +base+, combining nested hashes key-by-key
+# so that only the keys present in +override+ are changed.
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Loads the ai-summary format config from +path+ and applies an optional
+def load_format_config(path)
+  cfg = YAML.safe_load(File.read(path)) || {}
+
+  override_path = '/etc/bigbluebutton/ai-summary.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) || {}
+    cfg = deep_merge_hashes(cfg, override)
+  end
+
+  cfg
+end
+
 # Helper method to parse meeting ID and playback format.
 # Strips the known "-ai-summary" suffix rather than splitting on the last hyphen,
 # because the format name itself contains a hyphen.
@@ -113,10 +138,10 @@ BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 
 bbb_props   = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
 if script_dir.start_with?(BBB_SCRIPTS_DIR)
-  format_props = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/ai-summary.yml"))
+  format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
 else
   project_root = File.expand_path('../../..', script_dir)
-  format_props  = YAML.safe_load(File.read("#{project_root}/src/ai-summary/ai-summary.yml"))
+  format_props = load_format_config("#{project_root}/src/ai-summary/ai-summary.yml")
 end
 
 # Set up paths

@@ -134,11 +134,37 @@ die "Events XML not found: #{events_xml}" unless File.exist?(events_xml)
 
 TRANSCRIPTION_YML = File.join(__dir__, 'transcription.yml').freeze
 
-config = {}
-if File.exist?(TRANSCRIPTION_YML)
-  config = YAML.safe_load(File.read(TRANSCRIPTION_YML)) rescue {}
-  info "Loaded config from #{TRANSCRIPTION_YML}"
+# Recursively merges +override+ into +base+, combining nested hashes key-by-key
+# so that only the keys present in +override+ are changed.
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
 end
+
+# Loads transcription.yml from +yml_path+ and applies an optional operator
+def load_transcription_config(yml_path)
+  config = {}
+  if File.exist?(yml_path)
+    config = YAML.safe_load(File.read(yml_path)) rescue {}
+    info "Loaded config from #{yml_path}"
+  end
+
+  override_path = '/etc/bigbluebutton/post-archive-transcription.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) rescue {}
+    config = deep_merge_hashes(config, override)
+    info "Applied config override from #{override_path}"
+  end
+
+  config
+end
+
+config     = load_transcription_config(TRANSCRIPTION_YML)
 openai_cfg = config['openai'] || {}
 vad_cfg    = config['vad']    || {}
 

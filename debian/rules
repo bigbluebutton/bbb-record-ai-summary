@@ -40,11 +40,7 @@ override_dh_auto_install:
 
 	# Config templates — stored out of the way; postinst copies them to their final location
 	install -d debian/bbb-record-ai-summary/usr/share/bbb-record-ai-summary
-	install -m 644 src/ai-summary/llm.yml.example \
-		debian/bbb-record-ai-summary/usr/share/bbb-record-ai-summary/
-	install -m 644 src/ai-summary/docs.yml.example \
-		debian/bbb-record-ai-summary/usr/share/bbb-record-ai-summary/
-	install -m 644 src/scripts/transcription/transcription.yml.example \
+	install -m 644 src/scripts/transcription/transcription.yml \
 		debian/bbb-record-ai-summary/usr/share/bbb-record-ai-summary/
 
 	# ERB templates

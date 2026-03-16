@@ -1,5 +1,78 @@
+# ai-summary format configuration
+# This file is tracked in git with safe defaults.
+# To apply credentials or override any setting on a production server,
+# create /etc/bigbluebutton/ai-summary.yml with only the keys you want to change.
+
+# ── Format settings ──────────────────────────────────────────────────────────
 publish_dir: /var/bigbluebutton/published/ai-summary
 playback_dir: /usr/local/bigbluebutton/core/playback/ai-summary
 format: html
 whisper_threads: 4
 include_chat_in_discussion: true
+
+# ── LLM summarization ─────────────────────────────────────
+llm:
+  # Provider selection: 'claude', 'openai', 'albert', or 'disabled'
+  provider: disabled
+
+  # API keys — environment variables take priority over these values:
+  #   ANTHROPIC_API_KEY, OPENAI_API_KEY, ALBERT_API_KEY
+  # Leave blank to use environment variables only.
+  anthropic_api_key: ''
+  openai_api_key: ''
+  albert_api_key: ''
+
+  # Claude (Anthropic) Configuration
+  claude:
+    model: 'claude-3-5-sonnet-20241022'  # or 'claude-3-haiku-20240307' for faster/cheaper
+    max_tokens: 1024
+    temperature: 0.7
+
+  # OpenAI Configuration
+  openai:
+    model: 'o4-mini'  # or 'gpt-4o' for better quality
+    # max_tokens: 1024 # - o4-mini doesn't expect these parameters
+    # temperature: 0.7 # - make sure the model chosen fits the parameters
+
+  # Albert Configuration (albert.api.etalab.gouv.fr — French government API)
+  albert:
+    model: 'openai/gpt-oss-120b'  # check available models at albert.api.etalab.gouv.fr
+    max_tokens: 1024
+    temperature: 0.7
+
+  # Force the summary output language (ISO 639-1 code, e.g. 'en', 'fr', 'es').
+  # When set, an instruction is appended to the system prompt overriding the language.
+  # When omitted, the system prompt instructs the LLM to detect the language automatically.
+  language: 'en'
+
+  # System prompt for summarization
+  system_prompt: |
+    You are summarizing a BigBlueButton meeting. You will receive the shared notes
+    and audio transcript from the meeting.
+
+    Create a concise summary that includes:
+
+    1. Main topics discussed
+    2. Key decisions made
+    3. Action items (if any)
+    4. Important points raised
+
+    Detect the language of the transcript and write the entire summary in that same language.
+    Never translate or switch languages.
+
+    Keep the summary clear, professional, and under 500 words.
+
+# ── La Suite Numérique Docs integration (formerly docs.yml) ──────────────────
+docs:
+  # Set to false to disable publishing to Docs entirely.
+  enabled: false
+
+  # Base URL of the Docs service
+  docs_host: https://docs.example.com
+
+  # Keycloak OIDC settings (client_credentials grant)
+  # First enable Service Account Roles in Keycloak client settings.
+  keycloak_host: id.example.com
+  realm: docs
+  client_id: docs
+  client_secret: CHANGE_ME_OIDC_CLIENT_SECRET

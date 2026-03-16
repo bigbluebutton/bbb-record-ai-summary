@@ -17,8 +17,7 @@
 # Meeting creation — set at /create time:
 #   meta_bbb-docs-document-id=<parent-document-uuid>
 #
-# Config file: /usr/local/bigbluebutton/core/lib/ai-summary/docs.yml
-#   (see docs.yml.example alongside this script)
+# Config: docs: section in /usr/local/bigbluebutton/core/scripts/ai-summary.yml
 #
 # BBB pipeline usage (run automatically by the recording worker):
 #   ruby post_publish/publish_to_docs.rb -m <meeting_id> -f <format>
@@ -52,7 +51,37 @@ unless format_name == 'ai-summary'
 end
 
 BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-BBB_LIB_DIR     = '/usr/local/bigbluebutton/core/lib/ai-summary'.freeze
+
+# Recursively merges +override+ into +base+, combining nested hashes key-by-key
+# so that only the keys present in +override+ are changed.
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Reads ai-summary.yml from +config_path+, applies an optional operator
+def load_docs_config(config_path, logger)
+  unless File.exist?(config_path)
+    logger.info("ai-summary.yml not found at #{config_path} — skipping docs upload.")
+    return nil
+  end
+
+  full_config = YAML.safe_load(File.read(config_path)) || {}
+
+  override_path = '/etc/bigbluebutton/ai-summary.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) || {}
+    full_config = deep_merge_hashes(full_config, override)
+    logger.info("Applied config override from #{override_path}")
+  end
+
+  full_config['docs']
+end
 
 bbb_props     = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
 log_dir       = bbb_props['log_dir']       || '/var/log/bigbluebutton'
@@ -67,16 +96,14 @@ logger.info('=== publish_to_docs post_publish ===')
 logger.info("Meeting ID : #{meeting_id}")
 logger.info("Format     : #{format_name}")
 
-docs_config_path = "#{BBB_LIB_DIR}/docs.yml"
-unless File.exist?(docs_config_path)
-  logger.info("docs.yml not found at #{docs_config_path} — skipping docs upload.")
+cfg = load_docs_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml", logger)
+if cfg.nil?
+  logger.info('No docs: section in ai-summary.yml — skipping docs upload.')
   exit 0
 end
 
-cfg = YAML.safe_load(File.read(docs_config_path))
-
 unless cfg.fetch('enabled', true)
-  logger.info('docs.yml has enabled: false — skipping docs upload.')
+  logger.info('docs.enabled is false — skipping docs upload.')
   exit 0
 end
 
