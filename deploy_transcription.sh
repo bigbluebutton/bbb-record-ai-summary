@@ -89,15 +89,13 @@ if $DRY_RUN; then
   echo "[dry-run] mkdir -p $TRANSCRIPTION_LIB_DIR"
   echo "[dry-run] cp $SRC_FILE $DEST_FILE"
   echo "[dry-run] cp $TRANSCRIPTION_SRC/transcription_utils.rb $TRANSCRIPTION_LIB_DIR"
-  [ -f "$TRANSCRIPTION_SRC/transcription.yml" ] && echo "[dry-run] cp $TRANSCRIPTION_SRC/transcription.yml $TRANSCRIPTION_LIB_DIR"
+  echo "[dry-run] cp $TRANSCRIPTION_SRC/transcription.yml $TRANSCRIPTION_LIB_DIR/transcription.yml"
   echo "[dry-run] chmod +x $DEST_FILE"
 else
   mkdir -p "$TRANSCRIPTION_LIB_DIR"
   cp "$SRC_FILE" "$DEST_FILE"
   cp "$TRANSCRIPTION_SRC/transcription_utils.rb" "$TRANSCRIPTION_LIB_DIR/transcription_utils.rb"
-  if [ -f "$TRANSCRIPTION_SRC/transcription.yml" ]; then
-    cp "$TRANSCRIPTION_SRC/transcription.yml" "$TRANSCRIPTION_LIB_DIR"
-  fi
+  cp "$TRANSCRIPTION_SRC/transcription.yml" "$TRANSCRIPTION_LIB_DIR/transcription.yml"
   chmod +x "$DEST_FILE"
   echo "Deployed: $DEST_FILE"
 
@@ -119,3 +117,6 @@ fi
 
 echo ""
 echo "Done. transcribe_audio.rb will now use '$PROVIDER' as its transcription back-end."
+echo ""
+echo "To apply your own credentials, copy your local transcription-override.yml to the override location:"
+echo "  cp $TRANSCRIPTION_SRC/transcription-override.yml /etc/bigbluebutton/post-archive-transcription.yml"

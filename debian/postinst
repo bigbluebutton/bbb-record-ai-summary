@@ -22,34 +22,18 @@ case "$1" in
     mkdir -p /var/bigbluebutton/recording/publish/ai-summary
     chown -R $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER /var/bigbluebutton/recording/publish/ai-summary
 
-    # Create llm.yml if it doesn't already exist
-    LLM_CONF=/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml
-    if [ ! -f "$LLM_CONF" ]; then
-      cp "$TEMPLATES_DIR/llm.yml.example" "$LLM_CONF"
-      chown $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER "$LLM_CONF"
-      chmod 640 "$LLM_CONF"
-    fi
-
-    # Create docs.yml if it doesn't already exist
-    DOCS_CONF=/usr/local/bigbluebutton/core/lib/ai-summary/docs.yml
-    if [ ! -f "$DOCS_CONF" ]; then
-      cp "$TEMPLATES_DIR/docs.yml.example" "$DOCS_CONF"
-      chown $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER "$DOCS_CONF"
-      chmod 640 "$DOCS_CONF"
-    fi
-
     # Create transcription.yml if it doesn't already exist
     TRANSCRIPTION_CONF=${TRANSCRIPTION_DIR}/transcription.yml
     if [ ! -f "$TRANSCRIPTION_CONF" ]; then
-      cp "$TEMPLATES_DIR/transcription.yml.example" "$TRANSCRIPTION_CONF"
+      cp "$TEMPLATES_DIR/transcription.yml" "$TRANSCRIPTION_CONF"
       chown $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER "$TRANSCRIPTION_CONF"
       chmod 640 "$TRANSCRIPTION_CONF"
     fi
 
     # Activate the chosen transcription backend as transcribe.rb
     db_get bbb-record-ai-summary/transcription-backend
-    BACKEND="$RET"
-    if [ -n "$BACKEND" ] && [ -f "${TRANSCRIPTION_DIR}/${BACKEND}.rb" ]; then
+    BACKEND="${RET:-openai_whisper}"
+    if [ -f "${TRANSCRIPTION_DIR}/${BACKEND}.rb" ]; then
       ln -sf "${TRANSCRIPTION_DIR}/${BACKEND}.rb" "${TRANSCRIPTION_DIR}/transcribe.rb"
     fi
 

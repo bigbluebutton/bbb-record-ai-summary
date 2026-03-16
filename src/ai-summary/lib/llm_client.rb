@@ -8,19 +8,18 @@ module LLMClient
     attr_reader :config, :provider_config
 
     def self.get_config_path()
-      # Load LLM configuration — works in both dev and production
       bbb_core = '/usr/local/bigbluebutton/core'
-      llm_config_path = if __dir__.start_with?("#{bbb_core}")
-        "#{bbb_core}/lib/ai-summary/llm.yml"
+      config_path = if __dir__.start_with?(bbb_core)
+        "#{bbb_core}/scripts/ai-summary.yml"
       else
         raise "Run summarization only in production."
       end
 
-      unless File.exist?(llm_config_path)
-        logger.warn("LLM config not found at #{llm_config_path}, skipping summarization")
+      unless File.exist?(config_path)
+        logger.warn("ai-summary.yml not found at #{config_path}, skipping summarization")
         return nil
       end
-      return llm_config_path
+      config_path
     end
 
     # Recursively merges +override+ into +base+, combining nested hashes
@@ -35,19 +34,23 @@ module LLMClient
       end
     end
 
-    # Loads llm.yml from +config_path+ and applies an optional operator override
-    # from /etc/bigbluebutton/ai-summary-llm.yml.
+    # Loads the llm: section from ai-summary.yml at +config_path+ and applies
+    # an optional operator override from /etc/bigbluebutton/ai-summary.yml.
+    # The full config is deep-merged first so that nested provider sections
+    # (claude:, openai:, albert:) are merged key-by-key, then the llm: slice
+    # is extracted and returned. Falls back to { 'provider' => 'disabled' }
+    # when no llm: section is present.
     def self.load_llm_config(config_path, logger)
-      config = YAML.load_file(config_path)
+      full_config = YAML.load_file(config_path)
 
-      override_path = '/etc/bigbluebutton/ai-summary-llm.yml'
+      override_path = '/etc/bigbluebutton/ai-summary.yml'
       if File.exist?(override_path)
         override = YAML.safe_load(File.read(override_path)) || {}
-        config = deep_merge_hashes(config, override)
-        logger.info("Applied LLM config override from #{override_path}")
+        full_config = deep_merge_hashes(full_config, override)
+        logger.info("Applied config override from #{override_path}")
       end
 
-      config
+      full_config['llm'] || { 'provider' => 'disabled' }
     end
 
     def self.create(logger, language: nil)

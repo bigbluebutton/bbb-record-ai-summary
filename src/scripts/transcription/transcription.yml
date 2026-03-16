@@ -12,9 +12,8 @@
 #   OPENAI_LANGUAGE  — language override (OpenAI only)
 
 # Output language as ISO-639-1 code (optional). Shared by all backends.
-# Override per-backend via ALBERT_LANGUAGE / OPENAI_LANGUAGE env vars.
 # Leave blank for auto-detection.
-# language: "fr"
+language: "en"
 
 # Voice Activity Detection — filters out chunks with little or no detected speech
 # before sending them to the API, preventing hallucinations on keyboard noise,

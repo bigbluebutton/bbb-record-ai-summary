@@ -149,13 +149,6 @@ cp -r "$FORMAT_SRC/publish/ai-summary.rb" "$BBB_SCRIPTS/publish"
 mkdir -p "$BBB_LIB/ai-summary"
 
 cp "$FORMAT_SRC/lib/llm_client.rb" "$BBB_LIB/ai-summary"
-cp "$FORMAT_SRC/llm.yml" "$BBB_LIB/ai-summary"
-if [ -f "$FORMAT_SRC/docs.yml" ]; then
-  cp "$FORMAT_SRC/docs.yml" "$BBB_LIB/ai-summary"
-else
-  echo "  WARNING: src/ai-summary/docs.yml not found — docs upload will be skipped at runtime."
-  echo "           Copy docs.yml.example to docs.yml and fill in your credentials."
-fi
 
 # Copy template files to correct place
 # /usr/local/bigbluebutton/core/playback/ai-summary
@@ -164,7 +157,8 @@ mkdir -p "$BBB_CORE/playback/ai-summary"
 
 cp -r "$FORMAT_SRC/templates/." "$BBB_CORE/playback/ai-summary"
 
-# Copy format config to BBB scripts root
+# Copy unified config to BBB scripts root.
+# ai-summary.yml contains llm and docs sections in addition to format settings.
 cp "$FORMAT_SRC/ai-summary.yml" "$BBB_SCRIPTS/ai-summary.yml"
 
 # Install nginx location block
@@ -185,3 +179,7 @@ chown -R $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER /var/bigbluebutton/published/ai
 
 mkdir -p /var/bigbluebutton/recording/publish/ai-summary
 chown -R $BIGBLUEBUTTON_USER:$BIGBLUEBUTTON_USER /var/bigbluebutton/recording/publish/ai-summary
+
+echo ""
+echo "To apply your own credentials, copy your local ai-summary.yml to the override location:"
+echo "  cp $FORMAT_SRC/ai-summary-override.yml /etc/bigbluebutton/ai-summary.yml"

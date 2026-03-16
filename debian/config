@@ -1,4 +1,5 @@
 #!/bin/sh -e
+export DEBIAN_FRONTEND=readline
 . /usr/share/debconf/confmodule
 
 db_input high bbb-record-ai-summary/transcription-backend || true
