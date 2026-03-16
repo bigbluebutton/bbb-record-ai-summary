@@ -1,0 +1,73 @@
+---
+name: "📦 Build .deb package"
+on:
+  push:
+    branches: ["ai-summary-new-format"]
+    tags: ["v*"]
+    paths-ignore:
+      - debian/changelog
+  pull_request:
+    branches: ["ai-summary-new-format"]
+    paths-ignore:
+      - debian/changelog
+
+jobs:
+  build-deb-package:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for dch_version.sh git describe
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y devscripts debhelper po-debconf
+
+      - name: Update debian/changelog version from git tag
+        run: |
+          eval "$(bash dch_version.sh)"
+          if [ -n "$DCH_VERSION" ]; then
+            dch --newversion "$DCH_VERSION" --distribution jammy --force-distribution "CI build from commit $(git rev-parse --short HEAD)"
+          fi
+
+      - name: Build Debian package
+        run: bash build.sh
+
+      - name: Move .deb to artifacts directory
+        run: |
+          mkdir -p artifacts
+          mv ../bbb-record-ai-summary_*.deb artifacts/
+          ls -la artifacts
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "bbb-record-ai-summary-ubuntu-22.04"
+          path: artifacts/*.deb
+
+  release:
+    name: "Upload assets to release"
+    needs: build-deb-package
+    runs-on: ubuntu-22.04
+    if: ${{ github.ref_type == 'tag' }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: "bbb-record-ai-summary-ubuntu-22.04"
+          path: "bbb-record-ai-summary-ubuntu-22.04"
+
+      - name: Create release asset archive
+        run: zip --junk-paths --recurse-paths --compression-method store "bbb-record-ai-summary-ubuntu-22.04.zip" "bbb-record-ai-summary-ubuntu-22.04"
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} "bbb-record-ai-summary-ubuntu-22.04.zip"
