@@ -3,6 +3,9 @@ logs/
 recording/
 whisper.cpp/
 
+# Dev scripts
+deploy_overrides.sh
+
 # Test files
 test_transcript.txt
 *.tmp
