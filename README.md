@@ -69,8 +69,14 @@ Add only the keys you want to set — they will be deep-merged over the package 
 
 ```yaml
 llm:
-  provider: 'claude'            # 'claude', 'openai', 'albert', or 'disabled'
-  anthropic_api_key: 'sk-...'  # or set ANTHROPIC_API_KEY env var
+  # Provider selection: 'claude', 'openai', 'albert', or 'disabled'
+  provider: albert
+
+  anthropic_api_key: '...'
+  openai_api_key: '...'
+  albert_api_key: '...'
+
+  language: 'en'
 ```
 
 Set `provider: 'disabled'` to skip LLM summarization entirely.
@@ -86,17 +92,13 @@ Create an operator override file at:
 Add only the API key for your chosen backend:
 
 ```yaml
+language: "en"
 
-llm:
-  # Provider selection: 'claude', 'openai', 'albert', or 'disabled'
-  provider: albert
+albert:
+  api_key: "..."
 
-  anthropic_api_key: ''
-  openai_api_key: '...'
-  albert_api_key: '...'
-
-  language: 'en'
-
+openai:
+  api_key: "..."
 
 ```
 
