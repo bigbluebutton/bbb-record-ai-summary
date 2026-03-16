@@ -1,0 +1,22 @@
+#!/bin/bash -e
+
+TRANSCRIPTION_DIR=/usr/local/bigbluebutton/core/lib/transcription
+
+case "$1" in
+  remove|disappear)
+    # Remove the symlink created by postinst (not a config file)
+    rm -f "${TRANSCRIPTION_DIR}/transcribe.rb"
+  ;;
+
+  purge)
+    rm -f "${TRANSCRIPTION_DIR}/transcribe.rb"
+    rm -f "${TRANSCRIPTION_DIR}/transcription.yml"
+  ;;
+
+  upgrade|failed-upgrade|abort-install|abort-upgrade)
+  ;;
+
+  *)
+    echo "## postrm called with unknown argument \`$1'" >&2
+  ;;
+esac

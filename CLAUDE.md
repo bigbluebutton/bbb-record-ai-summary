@@ -147,13 +147,11 @@ The `debian/` directory uses standard debhelper. `debian/rules` installs all sou
 
 `deploy_overrides.sh` copies `src/ai-summary/ai-summary-override.yml` → `/etc/bigbluebutton/ai-summary.yml` and `src/scripts/transcription/transcription-override.yml` → `/etc/bigbluebutton/post-archive-transcription.yml` (only if each source file exists). Use this to push local credential overrides to a dev/prod server without touching the tracked config files.
 
-After deployment, wire `ai-summary` into the pipeline in `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`:
-```yaml
-steps:
-  captions:
-    - "process:presentation"
-    - "process:ai-summary"
-  "process:ai-summary": "publish:ai-summary"
+After deployment, wire `ai-summary` into the pipeline:
+```bash
+BBB_YML=/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml
+sudo yq e -i '.steps.captions += ["process:ai-summary"]' "$BBB_YML"
+sudo yq e -i '.steps["process:ai-summary"] = "publish:ai-summary"' "$BBB_YML"
 ```
 
 ## Process Stage (`src/ai-summary/process/ai-summary.rb`)
