@@ -2,13 +2,14 @@ Source: bbb-record-ai-summary
 Section: web
 Priority: extra
 Maintainer: BigBlueButton <ffdixon@bigbluebutton.org>
-Build-Depends: debhelper (>= 13), po-debconf
+Build-Depends: debhelper (>= 13)
 Standards-Version: 4.1.4
 Homepage: https://bigbluebutton.org/
 
 Package: bbb-record-ai-summary
 Architecture: all
-Depends: ${misc:Depends}, debconf (>= 0.5) | debconf-2.0, bbb-record-core, pandoc, texlive-xetex, texlive-fonts-recommended, texlive-plain-generic
+Depends: ${misc:Depends}, bbb-record-core, pandoc, texlive-xetex, texlive-fonts-recommended, texlive-plain-generic
+Recommends: nodejs
 Description: BigBlueButton AI summary recording format
  Adds AI-powered features to BBB recordings: audio transcription,
  speaker-labeled WebVTT output, LLM-generated meeting summaries,

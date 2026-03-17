@@ -24,7 +24,7 @@ override_dh_auto_install:
 	install -m 755 src/scripts/post_archive/transcribe_audio.rb \
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/scripts/post_archive/
 
-	# Transcription backends (postinst symlinks the chosen one as transcribe.rb)
+	# Transcription backends (active one selected via transcriber_path in transcription.yml)
 	install -d debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription
 	install -m 644 src/scripts/transcription/transcription_utils.rb \
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/transcription_utils.rb

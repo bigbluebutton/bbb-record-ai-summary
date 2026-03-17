@@ -125,6 +125,42 @@ mkdir -p "$BBB_SCRIPTS/post_archive"
 cp -r "$POST_ARCHIVE_SRC/." "$BBB_SCRIPTS/post_archive/"
 
 # ---------------------------------------------------------------------------
+# Deploy transcription backends
+# ---------------------------------------------------------------------------
+echo "--- Deploying transcription backends ---"
+TRANSCRIPTION_SRC="$PROJECT_ROOT/src/scripts/transcription"
+TRANSCRIPTION_LIB_DIR="$BBB_LIB/transcription"
+
+mkdir -p "$TRANSCRIPTION_LIB_DIR"
+cp "$TRANSCRIPTION_SRC/openai_whisper.rb"      "$TRANSCRIPTION_LIB_DIR/openai_whisper.rb"
+cp "$TRANSCRIPTION_SRC/albert_whisper.rb"      "$TRANSCRIPTION_LIB_DIR/albert_whisper.rb"
+cp "$TRANSCRIPTION_SRC/transcription_utils.rb" "$TRANSCRIPTION_LIB_DIR/transcription_utils.rb"
+cp "$TRANSCRIPTION_SRC/transcription.yml"      "$TRANSCRIPTION_LIB_DIR/transcription.yml"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Install node-vad (optional — used by albert_whisper for VAD)
+# ---------------------------------------------------------------------------
+echo "--- Checking node-vad ---"
+if command -v npm &>/dev/null; then
+  if npm list -g node-vad --depth=0 &>/dev/null 2>&1; then
+    echo "[node-vad] Already installed"
+  else
+    echo "[node-vad] Installing globally..."
+    if ! $DRY_RUN; then
+      npm install -g node-vad --silent
+      echo "[node-vad] Installed"
+    else
+      echo "[dry-run] npm install -g node-vad"
+    fi
+  fi
+else
+  echo "[node-vad] WARNING: npm not found — VAD will be disabled at runtime."
+  echo "           Install Node.js then run: npm install -g node-vad"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
 # Deploy post_publish scripts
 # ---------------------------------------------------------------------------
 echo "--- Deploying post_publish scripts ---"

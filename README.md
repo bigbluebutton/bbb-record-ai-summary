@@ -20,7 +20,7 @@ After a BBB meeting is recorded, this format adds:
 Install the build dependencies first:
 
 ```bash
-sudo apt install debhelper po-debconf
+sudo apt install debhelper
 ```
 
 Then build:
@@ -43,19 +43,7 @@ Before installing, keep in mind that this integration only works with LiveKit. S
 sudo apt install ./bbb-record-ai-summary_0.1.0_all.deb
 ```
 
-`apt` will pull in all required dependencies (`pandoc`, `texlive-xetex`, etc.) automatically. During installation you will be prompted to choose a transcription backend (`openai_whisper` or `albert_whisper`). This selection can be changed later:
-
-```bash
-sudo dpkg-reconfigure bbb-record-ai-summary
-```
-
-To pre-seed the answer for automated/scripted installs:
-
-```bash
-echo "bbb-record-ai-summary bbb-record-ai-summary/transcription-backend select albert_whisper" \
-  | sudo debconf-set-selections
-sudo apt install ./bbb-record-ai-summary_0.1.0_all.deb
-```
+`apt` will pull in all required dependencies (`pandoc`, `texlive-xetex`, etc.) automatically.
 
 ### Step 2 — Configure the LLM provider
 
@@ -89,9 +77,15 @@ Create an operator override file at:
 /etc/bigbluebutton/post-archive-transcription.yml
 ```
 
-Add only the API key for your chosen backend:
+Add the API keys you want to set. Use `transcriber_path` to select the active backend like so:
 
 ```yaml
+# Path to the active transcription provider script.
+# Both providers are installed — point to the one you want to use:
+# Set to "disabled" (or omit) to fall back to the local whisper.cpp binary.
+# transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+
 language: "en"
 
 albert:
@@ -99,7 +93,6 @@ albert:
 
 openai:
   api_key: "..."
-
 ```
 
 ### Step 4 — (Optional) Configure Docs publishing
@@ -138,11 +131,7 @@ sudo make -C /usr/local/bin/whisper.cpp -j$(nproc)
 sudo bash /usr/local/bin/whisper.cpp/models/download-ggml-model.sh base
 ```
 
-To switch back to the local fallback after having used a cloud provider:
-
-```bash
-sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-```
+To switch back to the local whisper.cpp fallback, set `transcriber_path: "disabled"` (or remove the key) in `/etc/bigbluebutton/post-archive-transcription.yml`.
 
 ### Step 6 — Wire the recording pipeline
 
@@ -241,30 +230,22 @@ steps:
 sudo systemctl restart bbb-rap-resque-worker
 ```
 
-### Step 5 — (Recommended) Deploy a back-end transcription provider
+### Step 5 — (Recommended) Configure a cloud transcription provider
 
-By default the fallback is a local `whisper.cpp` instance, which works but consumes server CPU. For production use, configure a cloud transcription provider:
+By default the fallback is a local `whisper.cpp` instance, which works but consumes server CPU. For production use, configure a cloud transcription provider on the server:
 
-Edit `src/scripts/transcription/transcription-override.yml` and fill in your API key:
+```bash
+sudo vi /etc/bigbluebutton/post-archive-transcription.yml
+```
 
 ```yaml
-openai_api_key: "sk-..."       # for openai_whisper
-# albert_api_key: "your-key"  # for albert_whisper
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+
+albert:
+  api_key: "..."
 ```
 
-Then deploy the provider of your choice (this also copies `transcription.yml` to the server):
-
-```bash
-./deploy_transcription.sh openai_whisper   # OpenAI Whisper API
-# or
-./deploy_transcription.sh albert_whisper   # Albert (French gov API)
-```
-
-To revert to the local whisper.cpp fallback at any time:
-
-```bash
-sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-```
+To revert to the local whisper.cpp fallback, set `transcriber_path: "disabled"` or remove the key.
 
 ## Transcription
 
@@ -282,8 +263,8 @@ If `transcription.json` already exists the script exits immediately — delete i
 
 | Priority | Back-end | Active when |
 |---|---|---|
-| 1 | **Provider script** | `transcribe.rb` exists in the transcription lib dir (see below) |
-| 2 | **whisper.cpp** | Built-in fallback, installed by `deploy.sh` |
+| 1 | **Provider script** | `transcriber_path` in `transcription.yml` points to a valid executable |
+| 2 | **whisper.cpp** | Built-in fallback, used when no valid `transcriber_path` is set |
 
 ### Built-in whisper.cpp fallback
 
@@ -291,7 +272,7 @@ If `transcription.json` already exists the script exits immediately — delete i
 
 ### Provider scripts
 
-Provider scripts live in `src/scripts/transcription/`. Each script is a self-contained Ruby file that is deployed as `transcribe.rb` in the transcription lib dir on the server. Only one provider is active at a time.
+Both providers are installed by the Debian package to `/usr/local/bigbluebutton/core/lib/transcription/`. The active one is selected via `transcriber_path` in the transcription config.
 
 **Available providers:**
 
@@ -302,30 +283,20 @@ Provider scripts live in `src/scripts/transcription/`. Each script is a self-con
 
 Both providers use `transcription_utils.rb` to split audio into per-speech chunks derived from `events.xml` talking cues before sending to the API.
 
-**Deploying a provider:**
+**Activating a provider:**
 
-```bash
-./deploy_transcription.sh openai_whisper   # deploy the OpenAI Whisper provider
-./deploy_transcription.sh albert_whisper   # deploy the Albert provider
-./deploy_transcription.sh openai_whisper --dry-run  # preview without writing
+Set `transcriber_path` in `/etc/bigbluebutton/post-archive-transcription.yml`:
+
+```yaml
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 ```
 
-This copies `src/scripts/transcription/<provider>.rb` to:
-
-```
-/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-```
-
-and also copies `transcription_utils.rb` to the same directory, then makes `transcribe.rb` executable. To revert to the whisper.cpp fallback, remove that file:
-
-```bash
-sudo rm /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-```
+To revert to the whisper.cpp fallback, set `transcriber_path: "disabled"` or remove the key.
 
 **Testing a provider directly against a single audio file:**
 
 ```bash
-sudo ruby /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb \
+sudo ruby /usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb \
   /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
   /tmp/test_transcription.json \
   /var/bigbluebutton/recording/raw/<meeting_id>/events.xml
@@ -346,7 +317,7 @@ A provider script must:
 }
 ```
 
-Timestamps (`from` / `to`) are in **milliseconds**. Place the script in `src/scripts/transcription/<name>.rb` and deploy it with `deploy_transcription.sh <name>`.
+Timestamps (`from` / `to`) are in **milliseconds**. Place the script anywhere accessible, then point `transcriber_path` to it in `/etc/bigbluebutton/post-archive-transcription.yml`.
 
 You can use `transcription_utils.rb` in your own script to get the same audio chunking logic as the bundled providers:
 

@@ -13,7 +13,7 @@
 After the first deploy, add `ai-summary` to the BBB pipeline (one-time step):
 
 ```bash
-sudo nano /usr/local/bigbluebutton/core/scripts/bigbluebutton.yml
+sudo vi /usr/local/bigbluebutton/core/scripts/bigbluebutton.yml
 ```
 
 Add under `steps`:
@@ -90,39 +90,30 @@ sudo tail -f /var/log/bigbluebutton/bbb-rap-worker.log
 
 ## Configure LLM Summarization
 
-```bash
-# Copy the example config
-cp src/ai-summary/llm.yml.example src/ai-summary/llm.yml
+Edit the operator override on the server:
 
-# Edit provider and key
-nano src/ai-summary/llm.yml
+```bash
+sudo vi /etc/bigbluebutton/ai-summary.yml
 ```
 
 Minimal config for Claude:
 ```yaml
-provider: 'claude'
-anthropic_api_key: 'sk-ant-...'
+llm:
+  provider: 'claude'
+  anthropic_api_key: 'sk-ant-...'
 ```
 
 Minimal config for OpenAI:
 ```yaml
-provider: 'openai'
-openai_api_key: 'sk-...'
+llm:
+  provider: 'openai'
+  openai_api_key: 'sk-...'
 ```
 
 To disable:
 ```yaml
-provider: 'disabled'
-```
-
-After editing, redeploy:
-```bash
-./deploy.sh
-```
-
-Or copy the file manually:
-```bash
-sudo cp src/ai-summary/llm.yml /usr/local/bigbluebutton/core/lib/ai-summary/llm.yml
+llm:
+  provider: 'disabled'
 ```
 
 > LLM calls only run in production — the client raises an error when invoked from a dev checkout.
@@ -131,14 +122,8 @@ sudo cp src/ai-summary/llm.yml /usr/local/bigbluebutton/core/lib/ai-summary/llm.
 
 ## Use a Custom Transcription Back-end
 
-Place a Ruby script named `transcribe.rb` in the transcription lib dir and make it executable:
+Write a Ruby script that accepts three positional arguments and produces a JSON file:
 
-```bash
-sudo nano /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-sudo chmod +x /usr/local/bigbluebutton/core/lib/transcription/transcribe.rb
-```
-
-The script receives three arguments:
 ```ruby
 #!/usr/bin/env ruby
 audio_file  = ARGV[0]  # path to the audio track
@@ -150,16 +135,17 @@ events_xml  = ARGV[2]  # path to events.xml (for talking cues / timestamps)
 # { "transcription": [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }] }
 ```
 
-If `transcribe.rb` exists and is executable, whisper.cpp is not used.
+Make it executable, then point `transcriber_path` to it in `/etc/bigbluebutton/post-archive-transcription.yml`:
 
-To deploy one of the bundled providers instead:
-
-```bash
-./deploy_transcription.sh openai_whisper   # OpenAI Whisper API
-./deploy_transcription.sh albert_whisper   # Albert (French gov) API
+```yaml
+transcriber_path: "/path/to/your/custom_transcriber.rb"
 ```
 
-This copies the provider script as `transcribe.rb` and always copies `transcription_utils.rb` alongside it (required by both bundled providers).
+To use one of the bundled providers instead, point `transcriber_path` to it directly:
+
+```yaml
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+```
 
 ---
 
@@ -169,16 +155,16 @@ This copies the provider script as `transcribe.rb` and always copies `transcript
 |---|---|
 | Post-archive script | `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb` |
 | Transcription shared utils | `/usr/local/bigbluebutton/core/lib/transcription/transcription_utils.rb` |
-| Active transcription provider | `/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb` |
 | OpenAI Whisper provider | `/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb` |
 | Albert Whisper provider | `/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb` |
 | Transcription config | `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml` |
+| Transcription config override | `/etc/bigbluebutton/post-archive-transcription.yml` |
 | Process script | `/usr/local/bigbluebutton/core/scripts/process/ai-summary.rb` |
 | Publish script | `/usr/local/bigbluebutton/core/scripts/publish/ai-summary.rb` |
 | LLM client | `/usr/local/bigbluebutton/core/lib/ai-summary/llm_client.rb` |
-| LLM config | `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml` |
 | Templates | `/usr/local/bigbluebutton/core/playback/ai-summary/` |
 | Format config | `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` |
+| Format config override | `/etc/bigbluebutton/ai-summary.yml` |
 | Nginx config | `/usr/share/bigbluebutton/nginx/ai-summary.nginx` |
 | Published recordings | `/var/bigbluebutton/published/ai-summary/<meeting_id>/` |
 | Raw recordings | `/var/bigbluebutton/recording/raw/<meeting_id>/` |
