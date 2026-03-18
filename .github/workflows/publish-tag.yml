@@ -1,4 +1,4 @@
-name: Cut a new tag (also auto-updates debian/changelog)
+name: Cut a new tag
 
 on:
   workflow_dispatch:
@@ -69,3 +69,26 @@ jobs:
           git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
           git tag -a "v${{ env.NEW_VERSION }}" -m "v${{ env.NEW_VERSION }}"
           git push --follow-tags
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y debhelper
+
+      - name: Build Debian package
+        run: bash build.sh
+
+      - name: Create release assets
+        run: |
+          mkdir -p artifacts
+          mv ../bbb-record-ai-summary_*.deb artifacts/
+          zip --junk-paths artifacts/bbb-record-ai-summary-ubuntu-22.04.zip artifacts/*.deb
+          git archive --format=zip --prefix=bbb-record-ai-summary/ HEAD > "artifacts/bbb-record-ai-summary-v${{ env.NEW_VERSION }}-source.zip"
+
+      - name: Create GitHub release and upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ env.NEW_VERSION }}" \
+            --title "v${{ env.NEW_VERSION }}" \
+            --notes "Release v${{ env.NEW_VERSION }}" \
+            artifacts/bbb-record-ai-summary-ubuntu-22.04.zip \
+            "artifacts/bbb-record-ai-summary-v${{ env.NEW_VERSION }}-source.zip"
