@@ -15,9 +15,10 @@
 # Leave blank for auto-detection.
 language: "en"
 
+transcriber_path: "disabled"
+
 # Voice Activity Detection — filters out chunks with little or no detected speech
-# before sending them to the API, preventing hallucinations on keyboard noise,
-# static, and other non-speech audio. Applies to all transcription backends.
+# before sending them to the API.
 # Requires node-vad: run  npm install -g node-vad  before enabling.
 vad:
   enabled: false

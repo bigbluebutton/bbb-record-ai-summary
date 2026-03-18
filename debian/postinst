@@ -1,5 +1,4 @@
 #!/bin/bash -e
-. /usr/share/debconf/confmodule
 
 BIGBLUEBUTTON_USER=bigbluebutton
 TRANSCRIPTION_DIR=/usr/local/bigbluebutton/core/lib/transcription
@@ -30,11 +29,13 @@ case "$1" in
       chmod 640 "$TRANSCRIPTION_CONF"
     fi
 
-    # Activate the chosen transcription backend as transcribe.rb
-    db_get bbb-record-ai-summary/transcription-backend
-    BACKEND="${RET:-openai_whisper}"
-    if [ -f "${TRANSCRIPTION_DIR}/${BACKEND}.rb" ]; then
-      ln -sf "${TRANSCRIPTION_DIR}/${BACKEND}.rb" "${TRANSCRIPTION_DIR}/transcribe.rb"
+    # Install node-vad globally if npm is available (used by albert_whisper for VAD)
+    if command -v npm &>/dev/null; then
+      if ! npm list -g node-vad --depth=0 &>/dev/null 2>&1; then
+        npm install -g node-vad --silent || echo "WARNING: node-vad installation failed — VAD will be disabled."
+      fi
+    else
+      echo "NOTE: npm not found — install Node.js and run 'npm install -g node-vad' to enable VAD in albert_whisper."
     fi
 
     # Remove config templates now that they've been copied

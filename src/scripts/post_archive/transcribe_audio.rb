@@ -55,6 +55,36 @@ def log(logger, level, msg)
   $stdout.puts "[#{prefix}] #{msg}"
 end
 
+def deep_merge_hashes(base, override)
+  base.merge(override) do |_key, base_val, override_val|
+    if base_val.is_a?(Hash) && override_val.is_a?(Hash)
+      deep_merge_hashes(base_val, override_val)
+    else
+      override_val
+    end
+  end
+end
+
+# Loads transcription.yml
+def load_transcription_config
+  production = File.expand_path(__dir__) == '/usr/local/bigbluebutton/core/scripts/post_archive'
+  yml_path = if production
+    '/usr/local/bigbluebutton/core/lib/transcription/transcription.yml'
+  else
+    File.expand_path('../../transcription/transcription.yml', __dir__)
+  end
+
+  config = File.exist?(yml_path) ? (YAML.safe_load(File.read(yml_path)) || {}) : {}
+
+  override_path = '/etc/bigbluebutton/post-archive-transcription.yml'
+  if File.exist?(override_path)
+    override = YAML.safe_load(File.read(override_path)) || {}
+    config = deep_merge_hashes(config, override)
+  end
+
+  config
+end
+
 # Backend: whisper.cpp (built-in fallback)
 class WhisperBackend
   SEARCH_PATHS = [
@@ -184,18 +214,13 @@ end
 
 # Backend: custom transcribe.rb script
 class CustomScriptBackend
-  SEARCH_DIRS = [
-    '/usr/local/bigbluebutton/core/lib/transcription',
-    File.expand_path('../../transcription', __dir__),  # dev: src/scripts/transcription/
-  ].freeze
-
-  def initialize(logger)
+  def initialize(logger, custom_path)
     @logger = logger
-    @script = find_script
+    @script = custom_path
   end
 
   def available?
-    !@script.nil?
+    !@script.nil? && File.executable?(@script)
   end
 
   def report_status
@@ -216,18 +241,14 @@ class CustomScriptBackend
   end
 
   private
-
-  def find_script
-    SEARCH_DIRS
-      .map  { |dir| File.join(dir, 'transcribe.rb') }
-      .find { |p|   File.executable?(p) }
-  end
 end
 
 # CLI
 opts = Optimist::options do
   opt :meeting_id, 'Meeting id', type: String
 end
+
+transcription_props = load_transcription_config
 
 meeting_id = opts[:meeting_id]
 Optimist::die :meeting_id, 'is required' if meeting_id.nil? || meeting_id.strip.empty?
@@ -281,7 +302,7 @@ end
 log(logger, :info, "Found #{audio_files.size} audio file(s): #{audio_files.map { |f| File.basename(f) }.join(', ')}")
 
 # Select transcription back-end (custom script takes priority)
-backend = CustomScriptBackend.new(logger)
+backend = CustomScriptBackend.new(logger, transcription_props['transcriber_path'])
 
 unless backend.available?
   backend = WhisperBackend.new(logger)

@@ -132,8 +132,7 @@ The test recording workspace is `recording/raw/<meeting_id>/` (gitignored). Dele
 The `debian/` directory uses standard debhelper. `debian/rules` installs all source files to the correct production paths. `debian/postinst`:
 - Creates `/var/bigbluebutton/published/ai-summary/`, log dir, and staging publish dir
 - Copies `transcription.yml` to its final location if it doesn't already exist
-- Prompts (via debconf) for the transcription backend (`openai_whisper` or `albert_whisper`) and symlinks the chosen one as `transcribe.rb`
-- To switch backends post-install: `dpkg-reconfigure bbb-record-ai-summary`
+- Both `openai_whisper.rb` and `albert_whisper.rb` are installed; the active one is selected via `transcriber_path` in `/etc/bigbluebutton/post-archive-transcription.yml`
 
 ## Deployment
 

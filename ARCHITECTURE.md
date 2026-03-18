@@ -61,9 +61,9 @@ Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `w
 
 **Transcription back-end (priority order):**
 
-1. **Provider script** — if `transcribe.rb` exists in the transcription lib dir (`/usr/local/bigbluebutton/core/lib/transcription/`), it is called as:
+1. **Provider script** — if `transcriber_path` in `transcription.yml` points to a valid executable, it is called as:
    ```
-   transcribe.rb <audio_file> <output_json_file> <events_xml_file>
+   <transcriber_path> <audio_file> <output_json_file> <events_xml_file>
    ```
    The script must produce a JSON file at `<output_json_file>` with this structure:
    ```json
@@ -71,7 +71,7 @@ Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `w
    ```
    Both bundled providers (`openai_whisper.rb`, `albert_whisper.rb`) use `transcription_utils.rb` to split the audio into per-speech chunks via `events.xml` talking cues before sending to the API.
 
-2. **whisper.cpp fallback** — the binary is located by scanning a list of known paths. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`. The `-oj` flag produces segment-level JSON output.
+2. **whisper.cpp fallback** — used when `transcriber_path` is absent, `"disabled"`, or points to a non-executable path. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`. The `-oj` flag produces segment-level JSON output.
 
 **Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
 
@@ -210,7 +210,7 @@ LLMClient::Base
 └── DisabledClient — returns nil
 ```
 
-The config path is hardcoded to production (`/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`). The client raises an error if called from outside that directory, preventing accidental LLM calls in development.
+Config is read from the `llm:` section of `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`. The client raises an error if called from outside that directory, preventing accidental LLM calls in development.
 
 Environment variable override (takes priority over config):
 - `ANTHROPIC_API_KEY`
@@ -247,29 +247,6 @@ publish_dir: /var/bigbluebutton/published/ai-summary
 playback_dir: /usr/local/bigbluebutton/core/playback/ai-summary
 format: pdf
 whisper_threads: 4
-```
-
-### `llm.yml`
-
-Deployed to `/usr/local/bigbluebutton/core/lib/ai-summary/llm.yml`. Not committed to source control (use `llm.yml.example` as a template).
-
-```yaml
-provider: 'claude'         # 'claude', 'openai', or 'disabled'
-anthropic_api_key: '...'   # or use ANTHROPIC_API_KEY env var
-openai_api_key: '...'      # or use OPENAI_API_KEY env var
-
-claude:
-  model: 'claude-3-5-sonnet-20241022'
-  max_tokens: 1024
-  temperature: 0.7
-
-openai:
-  model: 'gpt-4o-mini'
-  max_tokens: 1024
-  temperature: 0.7
-
-system_prompt: |
-  You are summarizing a BigBlueButton meeting...
 ```
 
 ### `ai-summary-playback.nginx`
@@ -332,7 +309,6 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
 | `process/ai-summary.rb` | `src/ai-summary/process/` | `.../scripts/process/` |
 | `publish/ai-summary.rb` | `src/ai-summary/publish/` | `.../scripts/publish/` |
 | `llm_client.rb` | `src/ai-summary/lib/` | `.../lib/ai-summary/` |
-| `llm.yml` | `src/ai-summary/` | `.../lib/ai-summary/` |
 | `ai-summary.md.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
 | `ai-summary.html.erb` | `src/ai-summary/templates/` | `.../playback/ai-summary/` |
 | `ai-summary.yml` | `src/ai-summary/` | `.../scripts/ai-summary.yml` |
