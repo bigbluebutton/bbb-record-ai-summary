@@ -405,7 +405,8 @@ Each processed recording produces:
 | `ai-summary.md` | Markdown report with notes, transcript, and summary |
 | `ai-summary.html` | Standalone HTML report (dark/light mode, print-ready) |
 | `transcript.txt` | Plain text transcript, speaker-grouped |
-| `transcript_diarized.vtt` | WebVTT transcript with speaker labels and timestamps |
+| `transcription.vtt` | WebVTT transcript with speaker labels and timestamps |
+| `transcription.json` | Diarized transcript as JSON array with speaker, timestamps, and text |
 | `summary.txt` | LLM-generated meeting summary (if LLM enabled) |
 | `action_items.json` | Structured action items extracted by LLM (if LLM enabled) |
 | `metadata.xml` | BBB recording metadata |

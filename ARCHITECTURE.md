@@ -120,6 +120,7 @@ process/ai-summary/<meeting_id>/
 ├── ai-summary.html                 # Rendered HTML report
 ├── transcript.txt                  # Plain text, speaker-grouped
 ├── transcript_diarized.vtt         # WebVTT with speaker labels
+├── transcript_diarized.json        # Diarized transcript as JSON (speaker, timestamps, text)
 ├── summary.txt                     # LLM summary (if enabled)
 ├── action_items.json               # LLM action items (if enabled)
 └── metadata.xml                    # state="processed"
@@ -299,6 +300,8 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
   ├── ai-summary.pdf
   ├── ai-summary.md
   ├── ai-summary.html
+  ├── transcription.vtt
+  ├── transcription.json
   └── metadata.xml  (state=published, playback link, duration)
 ```
 
