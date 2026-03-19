@@ -1,0 +1,41 @@
+name: Build Debian Package
+description: Builds the bbb-record-ai-summary .deb package and uploads it as an artifact
+
+outputs:
+  artifact-name:
+    description: Name of the uploaded artifact
+    value: bbb-record-ai-summary-ubuntu-22.04
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y devscripts debhelper po-debconf
+
+    - name: Update debian/changelog version from git tag
+      shell: bash
+      run: |
+        eval "$(bash dch_version.sh)"
+        if [ -n "$DCH_VERSION" ]; then
+          dch --newversion "$DCH_VERSION" --distribution jammy --force-distribution "CI build from commit $(git rev-parse --short HEAD)"
+        fi
+
+    - name: Build Debian package
+      shell: bash
+      run: bash build.sh
+
+    - name: Move .deb to artifacts directory
+      shell: bash
+      run: |
+        mkdir -p artifacts
+        mv ../bbb-record-ai-summary_*.deb artifacts/
+        ls -la artifacts
+
+    - name: Upload Debian package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bbb-record-ai-summary-ubuntu-22.04
+        path: artifacts/*.deb
