@@ -1151,6 +1151,11 @@ unless FileTest.directory?(target_dir)
 
     transcript = Extractors::TranscriptExtractor.extract(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc, format_props)
 
+    if transcript.nil?
+      BigBlueButton.logger.error("No transcription available for #{meeting_id}. Run post_archive/transcribe_audio.rb first.")
+      exit 1
+    end
+
     polls = Extractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
 
     # Handle transcript format (can be string or hash with plain/diarized)
