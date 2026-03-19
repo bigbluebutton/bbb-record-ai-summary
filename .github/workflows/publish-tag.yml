@@ -1,4 +1,4 @@
-name: Cut a new tag (also auto-updates debian/changelog)
+name: Cut a new tag
 
 on:
   workflow_dispatch:
