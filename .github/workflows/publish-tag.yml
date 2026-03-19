@@ -16,8 +16,6 @@ on:
 jobs:
   bump-version:
     runs-on: ubuntu-22.04
-    outputs:
-      new_version: ${{ steps.compute-version.outputs.new_version }}
 
     steps:
       - name: Checkout repository
@@ -36,7 +34,6 @@ jobs:
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
 
       - name: Compute new version and update debian/changelog
-        id: compute-version
         run: |
           set -euo pipefail
 
@@ -57,7 +54,6 @@ jobs:
 
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "Bumping $CURRENT_VERSION → $NEW_VERSION"
 
           # Update debian/changelog
@@ -66,24 +62,13 @@ jobs:
               --force-distribution \
               "Release $NEW_VERSION"
 
-      - name: Commit and tag
+      - name: Commit, tag, and create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git add debian/changelog
           git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
           git tag -a "v${{ env.NEW_VERSION }}" -m "v${{ env.NEW_VERSION }}"
           git push --follow-tags
-
-  build-deb-package:
-    name: Build Debian package
-    needs: bump-version
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history needed for dch_version.sh git describe
-          ref: refs/tags/v${{ needs.bump-version.outputs.new_version }}
-
-      - name: Build Debian package
-        uses: ./.github/actions/build-deb-package
+          gh release create "v${{ env.NEW_VERSION }}" --title "v${{ env.NEW_VERSION }}" --generate-notes

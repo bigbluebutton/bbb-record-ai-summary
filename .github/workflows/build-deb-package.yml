@@ -3,9 +3,10 @@ name: "📦 Build .deb package"
 on:
   push:
     branches: ["ai-summary-new-format"]
-    tags: ["v*"]
   pull_request:
     branches: ["ai-summary-new-format"]
+  release:
+    types: [created]
 
 jobs:
   build-deb-package:
@@ -24,7 +25,7 @@ jobs:
     name: "Upload assets to release"
     needs: build-deb-package
     runs-on: ubuntu-22.04
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.event_name == 'release' }}
     permissions:
       contents: write
       actions: read
@@ -42,4 +43,4 @@ jobs:
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} "bbb-record-ai-summary-ubuntu-22.04.zip"
+        run: gh release upload ${{ github.event.release.tag_name }} "bbb-record-ai-summary-ubuntu-22.04.zip"
