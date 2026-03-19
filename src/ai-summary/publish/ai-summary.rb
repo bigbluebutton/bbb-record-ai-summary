@@ -120,6 +120,16 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
   logger.info("Added playback to metadata.xml")
 end
 
+def copy_process_file_to_publish_dir(filename_source, filename_target, process_dir, target_dir, logger)
+  source = "#{process_dir}/#{filename_source}"
+  if File.exist?(source)
+    FileUtils.cp(source, "#{target_dir}/#{filename_target}")
+    logger.info("Copied #{filename_source} to publish directory")
+  else
+    logger.warn("No #{filename_source} found in process dir, skipping.")
+  end
+end
+
 # Parse command line options
 opts = Optimist::options do
   opt :meeting_id, "Meeting id to archive", :default => '58f4a6b3-cd07-444d-8564-59116cb53974', :type => String
@@ -169,7 +179,7 @@ end
 
 begin
   # Create target directory (remove first to clear any leftover state from a previous failed run)
-  BigBlueButton.logger.info("Making dir target_dir")
+  BigBlueButton.logger.info("Making dir #{target_dir}")
   FileUtils.rm_rf(target_dir) if File.exist?(target_dir)
   FileUtils.mkdir_p target_dir
 
@@ -178,42 +188,17 @@ begin
   source_md = "#{process_dir}/ai-summary.md"
   output_pdf = "#{target_dir}/ai-summary.pdf"
 
-  if File.exist?(source_md)
-    conversion_successful = convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, BigBlueButton.logger)
-    if conversion_successful
-      FileUtils.cp(source_md, "#{target_dir}/ai-summary.md")
-      logger.info("Copied ai-summary.md to publish directory")
-    end
-  else
-    BigBlueButton.logger.info("No ai-summary.md found in process dir, skipping PDF conversion")
-  end
+  convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, BigBlueButton.logger)
 
-  source_html = "#{process_dir}/ai-summary.html"
-  FileUtils.cp(source_html, "#{target_dir}/ai-summary.html")
+  copy_process_file_to_publish_dir("ai-summary.md", "ai-summary.md", process_dir, target_dir, BigBlueButton.logger)
 
-  source_json = "#{process_dir}/ai-summary.json"
-  if File.exist?(source_json)
-    FileUtils.cp(source_json, "#{target_dir}/ai-summary.json")
-    logger.info("Copied ai-summary.json to publish directory")
-  else
-    logger.warn("ai-summary.json not found in process dir, skipping")
-  end
+  copy_process_file_to_publish_dir("ai-summary.html", "ai-summary.html", process_dir, target_dir, BigBlueButton.logger)
+
+  copy_process_file_to_publish_dir("ai-summary.json", "ai-summary.json", process_dir, target_dir, BigBlueButton.logger)
   
-  source_transcription_vtt = "#{process_dir}/transcript_diarized.vtt"
-  if File.exist?(source_transcription_vtt)
-    FileUtils.cp(source_transcription_vtt, "#{target_dir}/transcription.vtt")
-    logger.info("Copied transcription file to published directory")
-  else
-    logger.warn("transcription.vtt not found, skipping")
-  end
+  copy_process_file_to_publish_dir("transcript_diarized.vtt", "transcription.vtt", process_dir, target_dir, BigBlueButton.logger)
   
-  source_transcription_json = "#{process_dir}/transcript_diarized.json"
-  if File.exist?(source_transcription_json)
-    FileUtils.cp(source_transcription_json, "#{target_dir}/transcription.json")
-    logger.info("Copied transcription file to published directory")
-  else
-    logger.warn("transcription.json not found, skipping")
-  end
+  copy_process_file_to_publish_dir("transcript_diarized.json", "transcription.json", process_dir, target_dir, BigBlueButton.logger)
 
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
