@@ -62,13 +62,10 @@ jobs:
               --force-distribution \
               "Release $NEW_VERSION"
 
-      - name: Commit, tag, and create GitHub release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit and tag
         run: |
           set -euo pipefail
           git add debian/changelog
           git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
           git tag -a "v${{ env.NEW_VERSION }}" -m "v${{ env.NEW_VERSION }}"
           git push --follow-tags
-          gh release create "v${{ env.NEW_VERSION }}" --title "v${{ env.NEW_VERSION }}" --generate-notes
