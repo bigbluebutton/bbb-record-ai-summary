@@ -515,11 +515,20 @@ module Extractors
       logger.info("Loaded #{segments.size} segments from transcription.json " \
                   "(#{tracks_data.size} track(s))")
 
-      # Generate WebVTT with speaker labels
-      diarized      = merge_and_format_transcript(segments, recording_start, logger)
-      diarized_file = "#{target_dir}/transcript_diarized.vtt"
-      File.write(diarized_file, diarized)
+      # Generate speaker-attributed cues, then serialize to VTT and JSON
+      transcription_cues      = create_transcription_cues(segments, recording_start, logger)
+      
+      # Generate WebVTT
+      diarized_vtt       = format_cues_into_vtt(transcription_cues)
+      diarized_file      = "#{target_dir}/transcript_diarized.vtt"
+      File.write(diarized_file, diarized_vtt)
       logger.info("Saved diarized transcript: #{diarized_file}")
+
+      # Generate JSON
+      diarized_json = format_cues_into_json(transcription_cues)
+      diarized_json_file = "#{target_dir}/transcript_diarized.json"
+      File.write(diarized_json_file, JSON.pretty_generate(diarized_json))
+      logger.info("Saved diarized JSON transcript: #{diarized_json_file}")
 
       # Generate plain text
       plain_text      = generate_plain_text(segments)
@@ -527,7 +536,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized, language: json_data['language'], recording_start: recording_start }
+      { plain: plain_text, diarized: diarized_vtt, language: json_data['language'], recording_start: recording_start }
     end
 
     private
@@ -543,9 +552,10 @@ module Extractors
       format('%02d:%02d:%02d.%03d', hours, minutes, seconds, millis)
     end
 
-    # Build speaker-attributed WebVTT from sorted segment list
-    def self.merge_and_format_transcript(segments, recording_start, logger)
-      return '' if segments.empty?
+    # Build speaker-attributed cues from sorted segment list
+    # Returns: [{start_ms:, end_ms:, speaker:, text:}]
+    def self.create_transcription_cues(segments, recording_start, logger)
+      return [] if segments.empty?
 
       cues = []
 
@@ -585,15 +595,25 @@ module Extractors
       end
 
       cues.sort_by! { |c| c[:start_ms] }
+      logger.info("Generated #{cues.size} transcript cues")
+      cues
+    end
 
+    def self.format_cues_into_json(transcription_cues)
+      transcription_cues.map do |cue|
+        { from: format_timestamp(cue[:start_ms]), to: format_timestamp(cue[:end_ms]),
+          user_name: cue[:speaker], text: cue[:text] }
+      end
+    end
+
+    # Format cues array as a WebVTT string
+    def self.format_cues_into_vtt(transcription_cues)
       lines = ['WEBVTT', '']
-      cues.each do |cue|
+      transcription_cues.each do |cue|
         lines << "#{format_timestamp(cue[:start_ms])} --> #{format_timestamp(cue[:end_ms])}"
         lines << "#{cue[:speaker]}: #{cue[:text]}"
         lines << ''
       end
-
-      logger.info("Generated WebVTT with #{cues.size} cues")
       lines.join("\n")
     end
 

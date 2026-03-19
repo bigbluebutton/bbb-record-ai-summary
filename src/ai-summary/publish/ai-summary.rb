@@ -198,6 +198,22 @@ begin
   else
     logger.warn("ai-summary.json not found in process dir, skipping")
   end
+  
+  source_transcription_vtt = "#{process_dir}/transcript_diarized.vtt"
+  if File.exist?(source_transcription_vtt)
+    FileUtils.cp(source_transcription_vtt, "#{target_dir}/transcription.vtt")
+    logger.info("Copied transcription file to published directory")
+  else
+    logger.warn("transcription.vtt not found, skipping")
+  end
+  
+  source_transcription_json = "#{process_dir}/transcript_diarized.json"
+  if File.exist?(source_transcription_json)
+    FileUtils.cp(source_transcription_json, "#{target_dir}/transcription.json")
+    logger.info("Copied transcription file to published directory")
+  else
+    logger.warn("transcription.json not found, skipping")
+  end
 
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
