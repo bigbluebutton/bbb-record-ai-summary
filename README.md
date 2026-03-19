@@ -385,6 +385,16 @@ llm:
 
 The base config (with safe defaults) is at `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`. Keys set in `/etc/bigbluebutton/ai-summary.yml` are deep-merged over it at runtime.
 
+### Per-meeting prompt customization
+
+You can append a custom instruction to the LLM system prompt on a per-meeting basis via the BBB `/create` API:
+
+```
+meta_bbb-ai-summary-prompt-addition=Focus especially on technical decisions
+```
+
+The phrase is appended to the system prompt for both the summary and action items generation. If empty or absent, no change is made.
+
 ## Output Files
 
 Each processed recording produces:
@@ -395,7 +405,8 @@ Each processed recording produces:
 | `ai-summary.md` | Markdown report with notes, transcript, and summary |
 | `ai-summary.html` | Standalone HTML report (dark/light mode, print-ready) |
 | `transcript.txt` | Plain text transcript, speaker-grouped |
-| `transcript_diarized.vtt` | WebVTT transcript with speaker labels and timestamps |
+| `transcription.vtt` | WebVTT transcript with speaker labels and timestamps |
+| `transcription.json` | Diarized transcript as JSON array with speaker, timestamps, and text |
 | `summary.txt` | LLM-generated meeting summary (if LLM enabled) |
 | `action_items.json` | Structured action items extracted by LLM (if LLM enabled) |
 | `metadata.xml` | BBB recording metadata |

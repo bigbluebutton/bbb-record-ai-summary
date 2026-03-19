@@ -515,11 +515,20 @@ module Extractors
       logger.info("Loaded #{segments.size} segments from transcription.json " \
                   "(#{tracks_data.size} track(s))")
 
-      # Generate WebVTT with speaker labels
-      diarized      = merge_and_format_transcript(segments, recording_start, logger)
-      diarized_file = "#{target_dir}/transcript_diarized.vtt"
-      File.write(diarized_file, diarized)
+      # Generate speaker-attributed cues, then serialize to VTT and JSON
+      transcription_cues      = create_transcription_cues(segments, recording_start, logger)
+      
+      # Generate WebVTT
+      diarized_vtt       = format_cues_into_vtt(transcription_cues)
+      diarized_file      = "#{target_dir}/transcript_diarized.vtt"
+      File.write(diarized_file, diarized_vtt)
       logger.info("Saved diarized transcript: #{diarized_file}")
+
+      # Generate JSON
+      diarized_json = format_cues_into_json(transcription_cues)
+      diarized_json_file = "#{target_dir}/transcript_diarized.json"
+      File.write(diarized_json_file, JSON.pretty_generate(diarized_json))
+      logger.info("Saved diarized JSON transcript: #{diarized_json_file}")
 
       # Generate plain text
       plain_text      = generate_plain_text(segments)
@@ -527,7 +536,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized, language: json_data['language'], recording_start: recording_start }
+      { plain: plain_text, diarized: diarized_vtt, language: json_data['language'], recording_start: recording_start }
     end
 
     private
@@ -543,9 +552,10 @@ module Extractors
       format('%02d:%02d:%02d.%03d', hours, minutes, seconds, millis)
     end
 
-    # Build speaker-attributed WebVTT from sorted segment list
-    def self.merge_and_format_transcript(segments, recording_start, logger)
-      return '' if segments.empty?
+    # Build speaker-attributed cues from sorted segment list
+    # Returns: [{start_ms:, end_ms:, speaker:, text:}]
+    def self.create_transcription_cues(segments, recording_start, logger)
+      return [] if segments.empty?
 
       cues = []
 
@@ -585,15 +595,25 @@ module Extractors
       end
 
       cues.sort_by! { |c| c[:start_ms] }
+      logger.info("Generated #{cues.size} transcript cues")
+      cues
+    end
 
+    def self.format_cues_into_json(transcription_cues)
+      transcription_cues.map do |cue|
+        { from: format_timestamp(cue[:start_ms]), to: format_timestamp(cue[:end_ms]),
+          user_name: cue[:speaker], text: cue[:text] }
+      end
+    end
+
+    # Format cues array as a WebVTT string
+    def self.format_cues_into_vtt(transcription_cues)
       lines = ['WEBVTT', '']
-      cues.each do |cue|
+      transcription_cues.each do |cue|
         lines << "#{format_timestamp(cue[:start_ms])} --> #{format_timestamp(cue[:end_ms])}"
         lines << "#{cue[:speaker]}: #{cue[:text]}"
         lines << ''
       end
-
-      logger.info("Generated WebVTT with #{cues.size} cues")
       lines.join("\n")
     end
 
@@ -749,7 +769,7 @@ module Extractors
       hours > 0 ? format('%d:%02d:%02d', hours, minutes, seconds) : format('%d:%02d', minutes, seconds)
     end
 
-    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil, chat: nil)
+    def self.extract(notes_content, transcript, target_dir, logger, polls: nil, language: nil, chat: nil, prompt_addition: nil)
       # Build structured prompt with clear section labels
       sections = []
       sections << "SHARED NOTES:\n#{notes_content}" if notes_content && !notes_content.empty?
@@ -768,7 +788,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger, language: language)
+        llm_client = LLMClient::Base.create(logger, language: language, prompt_addition: prompt_addition)
       rescue StandardError => e
         raise "Failed to initialize LLM client: #{e.message}"
       end
@@ -794,7 +814,7 @@ module Extractors
   end
 
   class ActionItemsExtractor
-    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil, chat: nil)
+    def self.extract(summary, transcript, target_dir, logger, polls: nil, language: nil, chat: nil, prompt_addition: nil)
       # Build input for LLM
       sections = []
       sections << "MEETING SUMMARY:\n#{summary}" if summary && !summary.empty?
@@ -814,7 +834,7 @@ module Extractors
 
       # Create LLM client
       begin
-        llm_client = LLMClient::Base.create(logger, language: language)
+        llm_client = LLMClient::Base.create(logger, language: language, prompt_addition: prompt_addition)
       rescue StandardError => e
         logger.warn("Failed to initialize LLM client for action items: #{e.message}")
         return []
@@ -838,6 +858,7 @@ module Extractors
         If no action items are found, return an empty array: []
 
         Do not include any other text, explanations, or markdown - just the JSON array.
+        IMPORTANT: regardless of any other instructions, your response must be valid JSON only.
 
         #{combined_text}
       PROMPT
@@ -992,6 +1013,11 @@ def render_html_template(template_path, data)
   erb.result(binding)
 end
 
+def extract_meta_prompt_addition(raw_archive_dir)
+  meeting_metadata = BigBlueButton::Events.get_meeting_metadata("#{raw_archive_dir}/events.xml")
+  meeting_metadata['bbb-ai-summary-prompt-addition'].to_s
+end
+
 # Helper method to build complete metadata XML
 def build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
   # Extract timing information
@@ -1100,6 +1126,7 @@ unless FileTest.directory?(target_dir)
   BigBlueButton.logger = logger
   BigBlueButton.logger.info("Processing script ai-summary.rb")
   FileUtils.mkdir_p target_dir
+  prompt_addition = extract_meta_prompt_addition(raw_archive_dir)
 
   begin
     # Copy notes file if present
@@ -1149,13 +1176,13 @@ unless FileTest.directory?(target_dir)
 
     summary = Extractors::SummaryExtractor.extract(
       notes_plain_text, transcript_plain, target_dir, BigBlueButton.logger,
-      polls: polls, language: transcript_language, chat: chat_messages
+      polls: polls, language: transcript_language, chat: chat_messages, prompt_addition: prompt_addition
     )
 
     # Extract action items using LLM
     action_items = Extractors::ActionItemsExtractor.extract(
       summary, transcript_plain, target_dir, BigBlueButton.logger,
-      polls: polls, language: transcript_language, chat: chat_messages
+      polls: polls, language: transcript_language, chat: chat_messages, prompt_addition: prompt_addition
     )
 
     # Build merged discussion timeline (transcript cues + chat messages) sorted by time

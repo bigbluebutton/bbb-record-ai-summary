@@ -120,6 +120,7 @@ process/ai-summary/<meeting_id>/
 ├── ai-summary.html                 # Rendered HTML report
 ├── transcript.txt                  # Plain text, speaker-grouped
 ├── transcript_diarized.vtt         # WebVTT with speaker labels
+├── transcript_diarized.json        # Diarized transcript as JSON (speaker, timestamps, text)
 ├── summary.txt                     # LLM summary (if enabled)
 ├── action_items.json               # LLM action items (if enabled)
 └── metadata.xml                    # state="processed"
@@ -154,13 +155,15 @@ All extractors live inline in `process/ai-summary.rb` under `module Extractors`.
 - Returns `{ plain: String, diarized: String }` (WebVTT)
 
 **`SummaryExtractor`**
-- Combines notes content and plain transcript
-- Calls `LLMClient::Base.create(logger).summarize(text)`
+- Combines notes content, plain transcript, polls, and chat messages
+- Calls `LLMClient::Base.create(logger, language:, prompt_addition:).summarize(text)`
+- `prompt_addition` is appended to the LLM system prompt (see Per-Meeting Prompt Customization below)
 - Returns nil when LLM is disabled or unavailable
 - Saves result to `summary.txt`
 
 **`ActionItemsExtractor`**
 - Combines summary and transcript; sends to LLM with a structured JSON prompt
+- Also receives `prompt_addition`, appended to the system prompt
 - Parses JSON response (handles markdown code fences)
 - Returns `[{ owner: String, label: String, status: :ok|:warn|:pending }]`
 - Saves raw JSON to `action_items.json`
@@ -201,20 +204,24 @@ https://<playback_host>/ai-summary/<meeting_id>/ai-summary.pdf
 
 **Location (deployed):** `/usr/local/bigbluebutton/core/lib/ai-summary/llm_client.rb`
 
-Factory: `LLMClient::Base.create(logger)` — reads config and returns the appropriate client.
+Factory: `LLMClient::Base.create(logger, language: nil, prompt_addition: nil)` — reads config and returns the appropriate client.
 
 ```
 LLMClient::Base
 ├── ClaudeClient   — POST https://api.anthropic.com/v1/messages
 ├── OpenAIClient   — POST https://api.openai.com/v1/chat/completions
+├── AlbertClient   — POST https://albert.api.etalab.gouv.fr/v1/chat/completions
 └── DisabledClient — returns nil
 ```
+
+`prompt_addition` is stored as `@prompt_addition` on the base class and appended to the system prompt by `system_prompt`. It is sourced from the `bbb-ai-summary-prompt-addition` meeting metadata key (see Per-Meeting Prompt Customization below).
 
 Config is read from the `llm:` section of `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`. The client raises an error if called from outside that directory, preventing accidental LLM calls in development.
 
 Environment variable override (takes priority over config):
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
+- `ALBERT_API_KEY`
 
 ---
 
@@ -293,6 +300,8 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
   ├── ai-summary.pdf
   ├── ai-summary.md
   ├── ai-summary.html
+  ├── transcription.vtt
+  ├── transcription.json
   └── metadata.xml  (state=published, playback link, duration)
 ```
 
