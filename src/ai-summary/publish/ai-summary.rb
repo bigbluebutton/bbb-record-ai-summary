@@ -106,11 +106,18 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
   metadata.search('//recording/playback').each(&:remove)
 
   # Add playback information
+  base_url = "#{playback_protocol}://#{playback_host}/ai-summary/#{meeting_id}"
   Nokogiri::XML::Builder.with(metadata.at('recording')) do |xml|
     xml.playback {
       xml.format("ai-summary")
-      xml.link("#{playback_protocol}://#{playback_host}/ai-summary/#{meeting_id}/ai-summary.#{format}")
+      xml.link("#{base_url}/ai-summary.#{format}")
       xml.duration(recording_time.to_s)
+      xml.extensions {
+        xml.urls {
+          xml.url("#{base_url}/ai-summary.#{format}", type: format)
+          xml.url("#{base_url}/transcription.json", type: "json")
+        }
+      }
     }
   end
 
