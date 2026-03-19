@@ -178,8 +178,8 @@ All extractors are defined **inline in `process/ai-summary.rb`** under the `Extr
 | `NotesExtractor` | Shared notes HTML from `notes/notes.html`; counts words |
 | `PollsExtractor` | Poll data from `PollPublishedRecordEvent` in events.xml |
 | `TranscriptExtractor` | Reads pre-computed `transcription.json`; generates WebVTT and plain text |
-| `SummaryExtractor` | LLM-generated summary from notes + transcript |
-| `ActionItemsExtractor` | LLM-extracted action items as `[{owner:, label:, status:}]` |
+| `SummaryExtractor` | LLM-generated summary from notes + transcript; accepts optional `prompt_addition:` to append extra instructions to the system prompt |
+| `ActionItemsExtractor` | LLM-extracted action items as `[{owner:, label:, status:}]`; accepts `prompt_addition:`, with a hard JSON-only override at end of prompt to guard structured output |
 | `ChatExtractor` | Chat messages from `GroupChatMessageBroadcastEvent`/`PublicChatEvent` in events.xml |
 
 ### TranscriptExtractor
@@ -255,7 +255,7 @@ Output format:
 
 ## LLM Client (`src/ai-summary/lib/llm_client.rb`)
 
-Factory pattern: `LLMClient::Base.create(logger)` returns the right client.
+Factory pattern: `LLMClient::Base.create(logger, language: nil, prompt_addition: nil)` returns the right client. `prompt_addition` is stored as `@prompt_addition` on the base class and appended to the system prompt; sourced from the `bbb-ai-summary-prompt-addition` meeting metadata key.
 
 | Class | Provider |
 |---|---|

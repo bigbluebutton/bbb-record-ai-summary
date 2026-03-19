@@ -34,12 +34,7 @@ module LLMClient
       end
     end
 
-    # Loads the llm: section from ai-summary.yml at +config_path+ and applies
-    # an optional operator override from /etc/bigbluebutton/ai-summary.yml.
-    # The full config is deep-merged first so that nested provider sections
-    # (claude:, openai:, albert:) are merged key-by-key, then the llm: slice
-    # is extracted and returned. Falls back to { 'provider' => 'disabled' }
-    # when no llm: section is present.
+    # Loads the llm: section from ai-summary.yml
     def self.load_llm_config(config_path, logger)
       full_config = YAML.load_file(config_path)
 
@@ -53,7 +48,7 @@ module LLMClient
       full_config['llm'] || { 'provider' => 'disabled' }
     end
 
-    def self.create(logger, language: nil)
+    def self.create(logger, language: nil, prompt_addition: nil)
       llm_config_path = get_config_path()
 
       config = load_llm_config(llm_config_path, logger)
@@ -67,11 +62,11 @@ module LLMClient
 
       case provider
       when 'claude'
-        ClaudeClient.new(config, logger, language: effective_language)
+        ClaudeClient.new(config, logger, language: effective_language, prompt_addition: prompt_addition)
       when 'openai'
-        OpenAIClient.new(config, logger, language: effective_language)
+        OpenAIClient.new(config, logger, language: effective_language, prompt_addition: prompt_addition)
       when 'albert'
-        AlbertClient.new(config, logger, language: effective_language)
+        AlbertClient.new(config, logger, language: effective_language, prompt_addition: prompt_addition)
       when 'disabled'
         logger.info("LLM summary is disabled")
         DisabledClient.new(config, logger)
@@ -80,10 +75,11 @@ module LLMClient
       end
     end
 
-    def initialize(config, logger, language: nil)
+    def initialize(config, logger, language: nil, prompt_addition: nil)
       @config = config
       @logger = logger
       @language = language
+      @prompt_addition = prompt_addition
       @provider_config = config[@config['provider']] || {}
       if @provider_config.empty?
         @logger.warn("No '#{@config['provider']}:' section found in llm.yml — provider-specific settings (model, max_tokens, temperature) will use hardcoded defaults")
@@ -98,9 +94,10 @@ module LLMClient
 
     def system_prompt
       base = @config['system_prompt'] || "Summarize the following meeting content."
-      return base.rstrip unless @language && !@language.empty?
-
-      "#{base.rstrip}\n\nWrite your entire response in the language with ISO 639-1 code '#{@language}'."
+      result = base.rstrip
+      result = "#{result}\n\nWrite your entire response in the language with ISO 639-1 code '#{@language}'." if @language && !@language.empty?
+      result = "#{result}\n\n#{@prompt_addition.strip}" if @prompt_addition && !@prompt_addition.strip.empty?
+      result
     end
   end
 
@@ -115,7 +112,7 @@ module LLMClient
     API_VERSION = '2023-06-01'.freeze
     DEFAULT_MODEL = 'claude-3-5-sonnet-20241022'.freeze
 
-    def initialize(config, logger, language: nil)
+    def initialize(config, logger, language: nil, prompt_addition: nil)
       super
       @api_key = ENV['ANTHROPIC_API_KEY'] || @config['anthropic_api_key']
 
@@ -157,7 +154,7 @@ module LLMClient
     API_URL = 'https://api.openai.com/v1/chat/completions'.freeze
     DEFAULT_MODEL = 'gpt-4o-mini'.freeze
 
-    def initialize(config, logger, language: nil)
+    def initialize(config, logger, language: nil, prompt_addition: nil)
       super
       @api_key = ENV['OPENAI_API_KEY'] || @config['openai_api_key']
 
@@ -201,7 +198,7 @@ module LLMClient
     API_URL = 'https://albert.api.etalab.gouv.fr/v1/chat/completions'.freeze
     DEFAULT_MODEL = 'AgentPublic/llama3-instruct-8b'.freeze
 
-    def initialize(config, logger, language: nil)
+    def initialize(config, logger, language: nil, prompt_addition: nil)
       super
       @api_key = ENV['ALBERT_API_KEY'] || @config['albert_api_key']
 
