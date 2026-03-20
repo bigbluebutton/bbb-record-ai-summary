@@ -1,5 +1,5 @@
 ---
-name: "📦 Build .deb package"
+name: "Build .deb package"
 on:
   push:
     branches: ["ai-summary-new-format"]
@@ -35,12 +35,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: "bbb-record-ai-summary-ubuntu-22.04"
-          path: "bbb-record-ai-summary-ubuntu-22.04"
-
-      - name: Create release asset archive
-        run: zip --junk-paths --recurse-paths --compression-method store "bbb-record-ai-summary-ubuntu-22.04.zip" "bbb-record-ai-summary-ubuntu-22.04"
+          path: "artifacts"
 
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} "bbb-record-ai-summary-ubuntu-22.04.zip"
+        run: gh release upload ${{ github.event.release.tag_name }} artifacts/*.deb
