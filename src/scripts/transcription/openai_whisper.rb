@@ -72,7 +72,7 @@ end
 
 # Posts a single WAV chunk to the OpenAI Whisper API.
 # Returns an array of segment hashes with timestamps offset by chunk_offset_ms, or [].
-def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
+def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0, prompt: nil)
   file_size = File.size(wav_path)
   if file_size > MAX_BYTES
     info "  → chunk too large (#{(file_size / 1024.0 / 1024).round(1)} MB), skipping"
@@ -85,6 +85,8 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
   body_parts << text_field(boundary, 'language',        language) if language
   body_parts << text_field(boundary, 'response_format', 'verbose_json')
   body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
+  body_parts << text_field(boundary, 'temperature',     '0')
+  body_parts << text_field(boundary, 'prompt',          prompt) if prompt
   body_parts << "--#{boundary}\r\n" \
                 "Content-Disposition: form-data; name=\"file\"; " \
                 "filename=\"#{File.basename(wav_path)}\"\r\n" \
@@ -197,6 +199,43 @@ vad_opts = {
 }
 
 # ---------------------------------------------------------------------------
+# Extract speaker name from events.xml for this audio track
+# ---------------------------------------------------------------------------
+
+speaker_name = nil
+if File.exist?(events_xml)
+  require 'nokogiri'
+  events_doc     = Nokogiri::XML(File.open(events_xml))
+  audio_basename = File.basename(audio_file)
+
+  # Find the userId associated with this audio track
+  track_user_id = nil
+  events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").each do |ev|
+    if File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+      track_user_id = ev.at_xpath('userId')&.text
+      break
+    end
+  end
+
+  # Look up the participant name
+  if track_user_id
+    events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |ev|
+      if ev.at_xpath('userId')&.text == track_user_id
+        speaker_name = ev.at_xpath('name')&.text
+        break
+      end
+    end
+  end
+end
+
+speaker_prompt = if speaker_name
+  info "Speaker: #{speaker_name}"
+  "Meeting participant #{speaker_name} speaking. This is their individual microphone audio from a meeting."
+else
+  nil
+end
+
+# ---------------------------------------------------------------------------
 # Prepare audio chunks via events.xml (VAD filtering applied inside)
 # ---------------------------------------------------------------------------
 
@@ -236,7 +275,8 @@ http.start do |conn|
   chunks.each_with_index do |chunk_info, i|
     info "Chunk #{i + 1}/#{chunks.size}: #{chunk_info[:from_ms]}ms – #{chunk_info[:to_ms]}ms"
     segs = call_openai(chunk_info[:path], api_key, language, conn,
-                       chunk_offset_ms: chunk_info[:from_ms])
+                       chunk_offset_ms: chunk_info[:from_ms],
+                       prompt: speaker_prompt)
     info "  → #{segs.size} segment(s)"
     segments.concat(segs)
   end

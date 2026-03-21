@@ -17,6 +17,7 @@
 #   --skip-transcription   Skip the post_archive transcription step
 #   --skip-llm             Disable LLM summarization (sets provider=disabled)
 #   --clean                Wipe workspace before running
+#   --force-retranscribe   Clean + delete transcription.json to force full reprocessing
 #   --setup-only           Create the BBB directory tree with shim (non-BBB only)
 #   --teardown             Remove the shim BBB directory tree
 #
@@ -56,6 +57,7 @@ TARBALL=""
 SKIP_TRANSCRIPTION=false
 SKIP_LLM=false
 CLEAN=false
+FORCE_RETRANSCRIBE=false
 SETUP_ONLY=false
 TEARDOWN=false
 
@@ -64,6 +66,7 @@ for arg in "$@"; do
     --skip-transcription) SKIP_TRANSCRIPTION=true ;;
     --skip-llm)           SKIP_LLM=true ;;
     --clean)              CLEAN=true ;;
+    --force-retranscribe) CLEAN=true; FORCE_RETRANSCRIBE=true ;;
     --setup-only)         SETUP_ONLY=true ;;
     --teardown)           TEARDOWN=true ;;
     -h|--help)
@@ -339,6 +342,12 @@ else
   tar xzf "$TARBALL" -C "$WORKSPACE/raw/"
   echo "Unpacked to $WORKSPACE/raw/$MEETING_ID"
 fi
+
+# Delete pre-existing transcription.json to force re-transcription
+if $FORCE_RETRANSCRIBE; then
+  rm -f "$WORKSPACE/raw/$MEETING_ID/transcription/transcription.json"
+  echo "  (--force-retranscribe: deleted existing transcription.json)"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -397,6 +406,119 @@ eval $RUBY_CMD "$RUN_PROCESS" -m "$MEETING_ID"
 echo ""
 
 # ---------------------------------------------------------------------------
+# Web preview: copy processed output to web-accessible assets dir
+# ---------------------------------------------------------------------------
+ASSETS_DIR="/var/www/bigbluebutton-default/assets"
+PROCESS_DIR="$WORKSPACE/process/ai-summary/$MEETING_ID"
+
+if [ -d "$ASSETS_DIR" ] && [ -d "$PROCESS_DIR" ]; then
+  # Get the server's external hostname
+  PREVIEW_HOST=$(hostname -f)
+
+  # Verify HTTPS is reachable
+  if curl -sk --connect-timeout 3 "https://$PREVIEW_HOST/" >/dev/null 2>&1; then
+    echo "--- Publishing web preview ---"
+    PREVIEW_OUT="$ASSETS_DIR/$MEETING_ID"
+    sudo rm -rf "$PREVIEW_OUT"
+    sudo cp -r "$PROCESS_DIR" "$PREVIEW_OUT"
+    sudo chmod -R a+r "$PREVIEW_OUT"
+
+    # Generate index.html with file listing and inline text viewer
+    sudo bash -c "cat > '$PREVIEW_OUT/index.html'" << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Summary Preview</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #333; }
+  h1 { font-size: 1.4rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
+  .meeting-id { font-size: 0.8rem; color: #888; word-break: break-all; }
+  .files { list-style: none; padding: 0; }
+  .files li { padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+  .file-links { display: flex; gap: 0.75rem; align-items: center; }
+  .files a { text-decoration: none; color: #0066cc; font-weight: 500; }
+  .files a:hover { text-decoration: underline; }
+  .view-link { font-size: 0.85rem; font-weight: 400 !important; color: #666 !important; cursor: pointer; }
+  .view-link:hover { color: #0066cc !important; }
+  .size { color: #888; font-size: 0.85rem; white-space: nowrap; }
+  .primary { background: #f0f7ff; padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; }
+  .primary a { font-size: 1.1rem; }
+  #viewer { display: none; margin-top: 1rem; }
+  #viewer-header { display: flex; justify-content: space-between; align-items: center; background: #f5f5f5; padding: 0.5rem 1rem; border-radius: 6px 6px 0 0; border: 1px solid #ddd; border-bottom: none; }
+  #viewer-header span { font-weight: 600; font-size: 0.95rem; }
+  #viewer-close { background: none; border: 1px solid #ccc; border-radius: 4px; padding: 0.25rem 0.75rem; cursor: pointer; font-size: 0.85rem; }
+  #viewer-close:hover { background: #eee; }
+  #viewer-content { background: #fafafa; border: 1px solid #ddd; border-radius: 0 0 6px 6px; padding: 1rem; overflow-x: auto; max-height: 70vh; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 0.85rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="file-list"></div>
+<div id="viewer">
+  <div id="viewer-header">
+    <span id="viewer-title"></span>
+    <button id="viewer-close" onclick="closeViewer()">Close</button>
+  </div>
+  <pre id="viewer-content"></pre>
+</div>
+<script>
+const TEXT_EXTENSIONS = ['.json', '.vtt', '.txt', '.xml', '.md'];
+function isTextFile(name) {
+  return TEXT_EXTENSIONS.some(ext => name.endsWith(ext));
+}
+function viewFile(name) {
+  fetch(name).then(r => r.text()).then(text => {
+    document.getElementById('viewer-title').textContent = name;
+    document.getElementById('viewer-content').textContent = text;
+    document.getElementById('viewer').style.display = 'block';
+    document.getElementById('viewer').scrollIntoView({ behavior: 'smooth' });
+  });
+}
+function closeViewer() {
+  document.getElementById('viewer').style.display = 'none';
+}
+</script>
+</body>
+</html>
+HTMLEOF
+
+    # Build the file list dynamically
+    sudo bash -c "
+      CONTENT='<h1>AI Summary Preview</h1>'
+      CONTENT=\"\${CONTENT}<p class=\\\"meeting-id\\\">$MEETING_ID</p>\"
+
+      if [ -f '$PREVIEW_OUT/ai-summary.html' ]; then
+        CONTENT=\"\${CONTENT}<div class=\\\"primary\\\"><a href=\\\"ai-summary.html\\\">ai-summary.html</a> — HTML report (open this first)</div>\"
+      fi
+
+      CONTENT=\"\${CONTENT}<ul class=\\\"files\\\">\"
+      for f in '$PREVIEW_OUT'/*; do
+        fname=\$(basename \"\$f\")
+        [ \"\$fname\" = \"index.html\" ] && continue
+        fsize=\$(du -h \"\$f\" | cut -f1)
+        case \"\$fname\" in
+          *.json|*.vtt|*.txt|*.xml|*.md)
+            CONTENT=\"\${CONTENT}<li><span class=\\\"file-links\\\"><a href=\\\"\$fname\\\" download>\$fname</a><a class=\\\"view-link\\\" onclick=\\\"viewFile('\$fname')\\\">[view]</a></span><span class=\\\"size\\\">\$fsize</span></li>\"
+            ;;
+          *)
+            CONTENT=\"\${CONTENT}<li><span class=\\\"file-links\\\"><a href=\\\"\$fname\\\">\$fname</a></span><span class=\\\"size\\\">\$fsize</span></li>\"
+            ;;
+        esac
+      done
+      CONTENT=\"\${CONTENT}</ul>\"
+
+      # Insert content before the viewer div
+      sed -i 's|<div id=\"file-list\"></div>|<div id=\"file-list\">'\"\$CONTENT\"'</div>|' '$PREVIEW_OUT/index.html'
+    "
+
+    PREVIEW_URL="https://$PREVIEW_HOST/$MEETING_ID/index.html"
+    echo "  Preview: $PREVIEW_URL"
+    echo ""
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Stage 3: Publish
 # ---------------------------------------------------------------------------
 echo "--- Running publish stage ---"
@@ -423,6 +545,12 @@ else
   echo "WARNING: No output directory found. Check logs at:"
   echo "  $LOG_DIR/ai-summary/process-${MEETING_ID}.log"
   echo "  $LOG_DIR/ai-summary/publish-${MEETING_ID}.log"
+fi
+
+# Print preview URL again at the end for easy access
+if [ -n "${PREVIEW_URL:-}" ]; then
+  echo ""
+  echo "Web preview: $PREVIEW_URL"
 fi
 
 echo ""
