@@ -153,12 +153,13 @@ script_dir = File.expand_path(__dir__)  # .../ai-summary/publish
 
 BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 
-bbb_props   = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
 if script_dir.start_with?(BBB_SCRIPTS_DIR)
+  bbb_props    = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
   format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
 else
   project_root = File.expand_path('../../..', script_dir)
-  format_props = load_format_config("#{project_root}/src/ai-summary/ai-summary.yml")
+  bbb_props    = YAML.safe_load(File.read("#{project_root}/src/bigbluebutton.yml"))
+  format_props = load_format_config("#{project_root}/src/ai-summary.yml")
 end
 
 # Set up paths
