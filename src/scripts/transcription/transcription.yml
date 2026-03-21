@@ -21,7 +21,7 @@ transcriber_path: "disabled"
 # before sending them to the API.
 # Requires node-vad: run  npm install -g node-vad  before enabling.
 vad:
-  enabled: false
+  enabled: true
 
   # Minimum absolute speech duration (ms) a clip must contain to pass VAD.
   # The effective threshold is derived as min_speech_ms / clip_duration_ms,

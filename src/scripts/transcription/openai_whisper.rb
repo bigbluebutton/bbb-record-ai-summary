@@ -37,6 +37,17 @@ require 'securerandom'
 require 'yaml'
 require_relative 'transcription_utils'
 
+# Known Whisper hallucination patterns (YouTube outros, generic filler).
+# Whisper frequently fabricates these phrases over silence or background noise.
+HALLUCINATION_PATTERNS = [
+  /thank you for watching/i,
+  /don't forget to (like|subscribe)/i,
+  /see you in the next (video|episode)/i,
+  /please (like|subscribe)/i,
+  /thanks for (watching|listening)/i,
+  /^\s*(thanks\.?|bye\.?|thank you\.?|yes\.?)\s*$/i,
+].freeze
+
 MODEL     = 'whisper-1'.freeze
 MAX_BYTES = 25 * 1024 * 1024  # OpenAI hard limit per request
 
@@ -97,6 +108,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
   (data['segments'] || []).filter_map do |seg|
     text = seg['text'].to_s.strip
     next if text.empty?
+    next if HALLUCINATION_PATTERNS.any? { |pat| text.match?(pat) }
 
     no_speech_prob    = seg['no_speech_prob'].to_f
     compression_ratio = seg['compression_ratio'].to_f
