@@ -59,6 +59,7 @@
     .discussion-item:last-child { border-bottom: 0; }
     .discussion-item time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; padding-top: 2px; }
     .discussion-item .speaker { font-weight: 600; margin-right: 6px; }
+    .discussion-item.chat-msg { margin-left: 32px; background: var(--bg); border-radius: 8px; border-bottom: none; padding: 8px 14px; margin-top: 4px; margin-bottom: 4px; font-size: 14px; }
     .discussion-item.chat-msg .sender { font-weight: 600; margin-right: 4px; }
     .discussion-item.chat-msg .chat-icon { margin-right: 5px; opacity: .65; vertical-align: middle; }
   </style>
@@ -97,7 +98,7 @@
       <a href="#polls">Poll Results</a>
       <% end %>
       <% if @discussion_timeline && !@discussion_timeline.empty? %>
-      <a href="#discussion">Discussion</a>
+      <a href="#discussion">Transcript</a>
       <% else %>
       <a href="#transcript">Audio Transcript</a>
       <% end %>
@@ -145,8 +146,10 @@
 
     <% if @discussion_timeline && !@discussion_timeline.empty? %>
     <section id="discussion" aria-labelledby="discussion-h">
-      <h2 id="discussion-h">Discussion <span class="pill"><%= @discussion_timeline.size %></span></h2>
-      <p class="muted" style="margin-top:0;margin-bottom:12px">Transcript cues and public chat messages in chronological order.</p>
+      <h2 id="discussion-h">Transcript <span class="pill"><%= @discussion_timeline.size %></span></h2>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-top:0;margin-bottom:12px;color:var(--muted);font-size:14px;cursor:pointer;">
+        <input type="checkbox" id="show-chat" checked onchange="toggleChat(this.checked)" /> Show chat messages
+      </label>
       <details class="transcript" open>
         <summary>Expand / Collapse</summary>
         <% @discussion_timeline.each do |item| %>
@@ -250,6 +253,13 @@
     document.getElementById('collapseBtn')?.addEventListener('click', () => {
       document.querySelectorAll('details.transcript').forEach(d => { d.open = !d.open; });
     });
+
+    // Toggle chat messages in discussion timeline
+    function toggleChat(show) {
+      document.querySelectorAll('.discussion-item.chat-msg').forEach(el => {
+        el.style.display = show ? '' : 'none';
+      });
+    }
 
     // Smooth scroll for TOC links
     document.querySelectorAll('a[href^="#"]').forEach(a => {

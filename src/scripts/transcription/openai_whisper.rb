@@ -45,7 +45,10 @@ HALLUCINATION_PATTERNS = [
   /see you in the next (video|episode)/i,
   /please (like|subscribe)/i,
   /thanks for (watching|listening)/i,
+  /thank you for joining/i,
   /^\s*(thanks\.?|bye\.?|thank you\.?|yes\.?)\s*$/i,
+  /individual microphone audio/i,
+  /\bspeaking\.\s*$/i,
 ].freeze
 
 MODEL     = 'whisper-1'.freeze
