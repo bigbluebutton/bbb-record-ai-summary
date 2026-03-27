@@ -117,7 +117,7 @@ meta_bbb-docs-document-id=<parent-document-uuid>
 
 ### Step 5 — (Optional) Install whisper.cpp for local fallback transcription
 
-If you prefer not to use a cloud API, you can install whisper.cpp locally. The transcription hook will use it automatically when no `transcribe.rb` provider is active.
+If you prefer not to use a cloud API, you can install whisper.cpp locally. The transcription hook will use it automatically when `transcriber_path` is set to `"disabled"` or omitted.
 
 ```bash
 # Install build dependencies
@@ -334,10 +334,15 @@ TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
 Provider scripts read their API key from (in priority order):
 
 1. Environment variable — `OPENAI_API_KEY` (openai_whisper) or `ALBERT_API_KEY` (albert_whisper)
-2. `transcription.yml` at `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml`
+2. Operator override at `/etc/bigbluebutton/post-archive-transcription.yml` (deep-merged over the base config)
+3. Base config at `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml`
+
+The recommended approach is to set keys in the operator override (as described in Step 3 above), keeping the base config untouched:
 
 ```yaml
-# /usr/local/bigbluebutton/core/lib/transcription/transcription.yml
+# /etc/bigbluebutton/post-archive-transcription.yml
+
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
 
 # For openai_whisper:
 openai:

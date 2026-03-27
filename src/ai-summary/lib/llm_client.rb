@@ -12,7 +12,10 @@ module LLMClient
       config_path = if __dir__.start_with?(bbb_core)
         "#{bbb_core}/scripts/ai-summary.yml"
       else
-        raise "Run summarization only in production."
+        # Dev mode: look for config relative to project root
+        dev_config = File.expand_path('../../../src/ai-summary.yml', __dir__)
+        dev_config = File.expand_path('../../../src/ai-summary/ai-summary.yml', __dir__) unless File.exist?(dev_config)
+        dev_config
       end
 
       unless File.exist?(config_path)
