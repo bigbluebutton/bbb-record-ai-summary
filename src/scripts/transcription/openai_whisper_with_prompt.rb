@@ -37,6 +37,20 @@ require 'securerandom'
 require 'yaml'
 require_relative 'transcription_utils'
 
+# Known Whisper hallucination patterns (YouTube outros, generic filler).
+# Whisper frequently fabricates these phrases over silence or background noise.
+HALLUCINATION_PATTERNS = [
+  /thank you for watching/i,
+  /don't forget to (like|subscribe)/i,
+  /see you in the next (video|episode)/i,
+  /please (like|subscribe)/i,
+  /thanks for (watching|listening)/i,
+  /thank you for joining/i,
+  /^\s*(thanks\.?|bye\.?|thank you\.?|yes\.?)\s*$/i,
+  /individual microphone audio/i,
+  /\bspeaking\.\s*$/i,
+].freeze
+
 MODEL     = 'whisper-1'.freeze
 MAX_BYTES = 25 * 1024 * 1024  # OpenAI hard limit per request
 
@@ -61,7 +75,7 @@ end
 
 # Posts a single WAV chunk to the OpenAI Whisper API.
 # Returns an array of segment hashes with timestamps offset by chunk_offset_ms, or [].
-def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
+def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0, prompt: nil)
   file_size = File.size(wav_path)
   if file_size > MAX_BYTES
     info "  → chunk too large (#{(file_size / 1024.0 / 1024).round(1)} MB), skipping"
@@ -75,6 +89,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
   body_parts << text_field(boundary, 'response_format', 'verbose_json')
   body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
   body_parts << text_field(boundary, 'temperature',     '0')
+  body_parts << text_field(boundary, 'prompt',          prompt) if prompt
   body_parts << "--#{boundary}\r\n" \
                 "Content-Disposition: form-data; name=\"file\"; " \
                 "filename=\"#{File.basename(wav_path)}\"\r\n" \
@@ -98,6 +113,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0)
   (data['segments'] || []).filter_map do |seg|
     text = seg['text'].to_s.strip
     next if text.empty?
+    next if HALLUCINATION_PATTERNS.any? { |pat| text.match?(pat) }
 
     no_speech_prob    = seg['no_speech_prob'].to_f
     compression_ratio = seg['compression_ratio'].to_f
@@ -184,6 +200,43 @@ vad_opts = {
   min_speech_ms:   (vad_cfg['min_speech_ms']    || TranscriptionUtils::VAD_MIN_SPEECH_MS).to_i,
   max_duration_ms: (vad_cfg['max_duration_ms']  || TranscriptionUtils::VAD_MAX_DURATION_MS).to_i,
 }
+
+# ---------------------------------------------------------------------------
+# Extract speaker name from events.xml for this audio track
+# ---------------------------------------------------------------------------
+
+speaker_name = nil
+if File.exist?(events_xml)
+  require 'nokogiri'
+  events_doc     = Nokogiri::XML(File.open(events_xml))
+  audio_basename = File.basename(audio_file)
+
+  # Find the userId associated with this audio track
+  track_user_id = nil
+  events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").each do |ev|
+    if File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+      track_user_id = ev.at_xpath('userId')&.text
+      break
+    end
+  end
+
+  # Look up the participant name
+  if track_user_id
+    events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |ev|
+      if ev.at_xpath('userId')&.text == track_user_id
+        speaker_name = ev.at_xpath('name')&.text
+        break
+      end
+    end
+  end
+end
+
+speaker_prompt = if speaker_name
+  info "Speaker: #{speaker_name}"
+  "Meeting participant #{speaker_name} speaking. This is their individual microphone audio from a meeting."
+else
+  nil
+end
 
 # ---------------------------------------------------------------------------
 # Prepare audio chunks via events.xml (VAD filtering applied inside)
