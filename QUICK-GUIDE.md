@@ -120,9 +120,29 @@ llm:
 
 ---
 
-## Use a Custom Transcription Back-end
+## Configure Transcription Back-ends
 
-Write a Ruby script that accepts three positional arguments and produces a JSON file:
+`transcriber_path` accepts a single path string or an array. Each entry is a separate provider run independently; the first provider drives LLM summarization and the report.
+
+**Single provider:**
+```yaml
+# /etc/bigbluebutton/post-archive-transcription.yml
+transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+```
+
+**Multiple providers:**
+```yaml
+# /etc/bigbluebutton/post-archive-transcription.yml
+transcriber_path:
+  - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+  - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+```
+
+Each provider produces its own published `transcription_<name>.json` in the same diarized format.
+
+## Write a Custom Transcription Back-end
+
+A provider script must accept three positional arguments and produce a JSON file:
 
 ```ruby
 #!/usr/bin/env ruby
@@ -135,17 +155,7 @@ events_xml  = ARGV[2]  # path to events.xml (for talking cues / timestamps)
 # { "transcription": [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }] }
 ```
 
-Make it executable, then point `transcriber_path` to it in `/etc/bigbluebutton/post-archive-transcription.yml`:
-
-```yaml
-transcriber_path: "/path/to/your/custom_transcriber.rb"
-```
-
-To use one of the bundled providers instead, point `transcriber_path` to it directly:
-
-```yaml
-transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
-```
+Make it executable, then add it to `transcriber_path` in `/etc/bigbluebutton/post-archive-transcription.yml`.
 
 ---
 

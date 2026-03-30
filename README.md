@@ -77,16 +77,20 @@ Create an operator override file at:
 /etc/bigbluebutton/post-archive-transcription.yml
 ```
 
-Add the API keys you want to set. Use `transcriber_path` to select the active backend like so:
+Use `transcriber_path` to select one or more active backends:
 
 ```yaml
-# Path to the active transcription provider script.
-# Both providers are installed — point to the one you want to use:
-# Set to "disabled" (or omit) to fall back to the local whisper.cpp binary.
-# transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+language: "en"
+
+# Single provider:
 transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 
-language: "en"
+# Multiple providers (run in order; each produces its own transcription file):
+# transcriber_path:
+#   - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+#   - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+
+# Set to "disabled" (or omit) to fall back to the local whisper.cpp binary.
 
 albert:
   api_key: "..."
@@ -94,6 +98,8 @@ albert:
 openai:
   api_key: "..."
 ```
+
+When multiple providers are configured, each one transcribes all audio tracks independently. The **first provider** is used for LLM summarization and the HTML/PDF/Markdown report. All providers' diarized transcripts are published as separate JSON files.
 
 ### Step 4 — (Optional) Configure Docs publishing
 
@@ -239,7 +245,13 @@ sudo vi /etc/bigbluebutton/post-archive-transcription.yml
 ```
 
 ```yaml
+# Single provider
 transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+
+# Or multiple providers — each produces its own published transcription file
+# transcriber_path:
+#   - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+#   - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 
 albert:
   api_key: "..."
@@ -249,22 +261,24 @@ To revert to the local whisper.cpp fallback, set `transcriber_path: "disabled"` 
 
 ## Transcription
 
-Audio transcription runs as a **post-archive hook** immediately after BBB archives a meeting. It processes every audio track found in `recording/raw/<meeting_id>/audio/` and writes a single merged output file:
+Audio transcription runs as a **post-archive hook** immediately after BBB archives a meeting. It processes every audio track found in `recording/raw/<meeting_id>/audio/` and writes output to:
 
 ```
-recording/raw/<meeting_id>/transcription/transcription.json
+recording/raw/<meeting_id>/transcription/
 ```
 
 If `transcription.json` already exists the script exits immediately — delete it to force a re-run.
 
 ### Back-ends
 
-`transcribe_audio.rb` selects a back-end in this order:
+`transcriber_path` in `transcription.yml` accepts a single path string or an array of paths. Each entry is treated as a separate provider; duplicate names (derived from the script basename) are ignored — first one wins.
 
 | Priority | Back-end | Active when |
 |---|---|---|
-| 1 | **Provider script** | `transcriber_path` in `transcription.yml` points to a valid executable |
-| 2 | **whisper.cpp** | Built-in fallback, used when no valid `transcriber_path` is set |
+| 1 | **Provider script(s)** | `transcriber_path` contains one or more valid executables |
+| 2 | **whisper.cpp** | Built-in fallback, used when `transcriber_path` is `"disabled"` or unset |
+
+When **multiple providers** are configured, each one runs independently over all audio tracks. The first provider's output is used for LLM summarization and the HTML/PDF/Markdown report. All providers' diarized transcripts are published.
 
 ### Built-in whisper.cpp fallback
 
@@ -272,7 +286,7 @@ If `transcription.json` already exists the script exits immediately — delete i
 
 ### Provider scripts
 
-Both providers are installed by the Debian package to `/usr/local/bigbluebutton/core/lib/transcription/`. The active one is selected via `transcriber_path` in the transcription config.
+Both providers are installed by the Debian package to `/usr/local/bigbluebutton/core/lib/transcription/`. The active one(s) are selected via `transcriber_path` in the transcription config.
 
 **Available providers:**
 
@@ -283,12 +297,20 @@ Both providers are installed by the Debian package to `/usr/local/bigbluebutton/
 
 Both providers use `transcription_utils.rb` to split audio into per-speech chunks derived from `events.xml` talking cues before sending to the API.
 
-**Activating a provider:**
-
-Set `transcriber_path` in `/etc/bigbluebutton/post-archive-transcription.yml`:
+**Activating a provider (single):**
 
 ```yaml
+# /etc/bigbluebutton/post-archive-transcription.yml
 transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+```
+
+**Activating multiple providers:**
+
+```yaml
+# /etc/bigbluebutton/post-archive-transcription.yml
+transcriber_path:
+  - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+  - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 ```
 
 To revert to the whisper.cpp fallback, set `transcriber_path: "disabled"` or remove the key.
@@ -344,23 +366,31 @@ The recommended approach is to set keys in the operator override (as described i
 
 transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
 
-# For openai_whisper:
 openai:
   api_key: 'sk-...'
 
-# For albert_whisper:
 albert:
   api_key: '...'
 ```
 
-### Output format
+### Post-archive output format
 
-`transcription.json` merges all tracks into one file:
+Each provider writes its own raw output file. `transcription.json` is always the canonical copy from the first provider:
+
+```
+recording/raw/<meeting_id>/transcription/
+├── transcription.json                  # canonical (copy of first provider's output)
+├── transcription_openai_whisper.json   # per-provider raw output
+└── transcription_albert_whisper.json
+```
+
+Each file has the same structure, with an added `"provider"` field:
 
 ```json
 {
   "meeting_id": "...",
   "generated_at": "2025-01-01T12:00:00Z",
+  "provider": "openai_whisper",
   "tracks": [
     {
       "file": "microphone-<user>-<track>.webm",
@@ -411,10 +441,19 @@ Each processed recording produces:
 | `ai-summary.html` | Standalone HTML report (dark/light mode, print-ready) |
 | `transcript.txt` | Plain text transcript, speaker-grouped |
 | `transcription.vtt` | WebVTT transcript with speaker labels and timestamps |
-| `transcription.json` | Diarized transcript as JSON array with speaker, timestamps, and text |
+| `transcription.json` | Diarized transcript from the first provider — `[{from, to, user_name, text}]` |
+| `transcription_<provider>.json` | Same diarized format for each additional provider (one file per provider) |
 | `summary.txt` | LLM-generated meeting summary (if LLM enabled) |
 | `action_items.json` | Structured action items extracted by LLM (if LLM enabled) |
-| `metadata.xml` | BBB recording metadata |
+| `metadata.xml` | BBB recording metadata (includes a `<url>` entry per provider transcription) |
+
+The diarized JSON format is identical across all transcription files:
+
+```json
+[
+  { "from": "00:00:01.200", "to": "00:00:04.800", "user_name": "Alice", "text": "Hello everyone." }
+]
+```
 
 ## Logs
 
