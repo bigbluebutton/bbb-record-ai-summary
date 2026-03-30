@@ -15,6 +15,16 @@
 # Leave blank for auto-detection.
 language: "en"
 
+# Path to the provider script, or an array of paths for multiple providers.
+# Use "disabled" (or omit) to skip custom providers and fall back to whisper.cpp.
+#
+# Single provider:
+#   transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb"
+#
+# Multiple providers (run in order; duplicate names are ignored):
+#   transcriber_path:
+#     - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+#     - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 transcriber_path: "disabled"
 
 # Voice Activity Detection — filters out chunks with little or no detected speech

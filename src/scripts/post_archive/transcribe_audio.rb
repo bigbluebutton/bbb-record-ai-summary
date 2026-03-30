@@ -55,6 +55,32 @@ def log(logger, level, msg)
   $stdout.puts "[#{prefix}] #{msg}"
 end
 
+# Accepts a single string or an array of strings. The value "disabled" (or a
+# blank string) is silently skipped. Duplicate names are removed, keeping only
+# the first occurrence.
+#
+# Examples:
+#   "disabled"                          → []
+#   "/path/to/openai_whisper.rb"        → [{ path: "...", name: "openai_whisper" }]
+#   ["/path/openai_whisper.rb",
+#    "/path/albert_whisper.rb"]         → [{ name: "openai_whisper", ... },
+#                                          { name: "albert_whisper",  ... }]
+def normalize_transcriber_paths(raw)
+  paths = raw.is_a?(Array) ? raw : [raw.to_s]
+
+  seen_names = {}
+  paths.each_with_object([]) do |entry, result|
+    str = entry.to_s.strip
+    next if str.empty? || str == 'disabled'
+
+    name = File.basename(str, '.rb')
+    next if seen_names.key?(name)
+
+    seen_names[name] = true
+    result << { path: str, name: name }
+  end
+end
+
 def deep_merge_hashes(base, override)
   base.merge(override) do |_key, base_val, override_val|
     if base_val.is_a?(Hash) && override_val.is_a?(Hash)
@@ -301,22 +327,34 @@ end
 
 log(logger, :info, "Found #{audio_files.size} audio file(s): #{audio_files.map { |f| File.basename(f) }.join(', ')}")
 
-# Select transcription back-end (custom script takes priority)
-backend = CustomScriptBackend.new(logger, transcription_props['transcriber_path'])
+# Select transcription back-end
+providers = normalize_transcriber_paths(transcription_props['transcriber_path'])
 
-unless backend.available?
-  backend = WhisperBackend.new(logger)
-
-  unless backend.available?
+backend = nil
+if providers.any?
+  first = providers.first
+  candidate = CustomScriptBackend.new(logger, first[:path])
+  if candidate.available?
+    backend = candidate
     backend.report_status
+  else
+    log(logger, :warn, "Configured transcriber '#{first[:name]}' not available at: #{first[:path]}")
+  end
+end
+
+if backend.nil?
+  whisper = WhisperBackend.new(logger)
+
+  unless whisper.available?
+    whisper.report_status
     log(logger, :warn, "No transcription backend available — skipping transcription.")
     exit 0
   end
 
   log(logger, :info, "Back-end: whisper.cpp (built-in fallback)")
+  backend = whisper
+  backend.report_status
 end
-
-backend.report_status
 
 # Skip if output already exists
 OUTPUT_JSON = File.join(transcription_dir, 'transcription.json').freeze
