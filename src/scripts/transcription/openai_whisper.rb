@@ -225,8 +225,7 @@ http.start do |conn|
   chunks.each_with_index do |chunk_info, i|
     info "Chunk #{i + 1}/#{chunks.size}: #{chunk_info[:from_ms]}ms – #{chunk_info[:to_ms]}ms"
     segs = call_openai(chunk_info[:path], api_key, language, conn,
-                       chunk_offset_ms: chunk_info[:from_ms],
-                       prompt: speaker_prompt)
+                       chunk_offset_ms: chunk_info[:from_ms])
     info "  → #{segs.size} segment(s)"
     segments.concat(segs)
   end

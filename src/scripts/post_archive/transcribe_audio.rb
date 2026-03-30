@@ -65,7 +65,7 @@ end
 #   ["/path/openai_whisper.rb",
 #    "/path/albert_whisper.rb"]         → [{ name: "openai_whisper", ... },
 #                                          { name: "albert_whisper",  ... }]
-def normalize_transcriber_paths(raw)
+def get_normalized_transcriber_paths(raw)
   paths = raw.is_a?(Array) ? raw : [raw.to_s]
 
   seen_names = {}
@@ -269,6 +269,114 @@ class CustomScriptBackend
   private
 end
 
+def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, logger)
+  track_results = []
+  temp_files    = []
+
+  audio_files.each do |audio_file|
+    basename  = File.basename(audio_file)
+    temp_json = File.join(transcription_dir, ".tmp_#{basename}.json")
+    temp_files << temp_json
+
+    success = false
+    max_attempts = 5
+    wait = 5
+    max_attempts.times do |attempt|
+      File.delete(temp_json) if File.exist?(temp_json)
+      success = backend.transcribe(audio_file, temp_json, events_xml)
+      break if success
+      if attempt + 1 < max_attempts
+        log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
+        sleep(wait)
+        wait *= 2
+      end
+    end
+
+    unless success
+      track_results << { file: basename, segments: [], ok: false }
+      next
+    end
+
+    begin
+      raw      = JSON.parse(File.read(temp_json))
+      segments = (raw['transcription'] || []).map do |s|
+        { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
+      end.reject { |s| s['text'].empty? }
+
+      track_results << { file: basename, segments: segments, ok: true, language: raw['language'] }
+      log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
+    rescue JSON::ParserError => e
+      log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
+      track_results << { file: basename, segments: [], ok: false }
+    end
+  end
+
+  temp_files.each { |f| File.delete(f) if File.exist?(f) }
+  track_results
+end
+
+def resolve_active_backends(providers, logger)
+  if providers.any?
+    active = providers.each_with_object([]) do |p, result|
+      candidate = CustomScriptBackend.new(logger, p[:path])
+      if candidate.available?
+        result << { name: p[:name], backend: candidate }
+      else
+        log(logger, :warn, "Provider '#{p[:name]}' not available at #{p[:path]} — skipping")
+      end
+    end
+
+    if active.empty?
+      log(logger, :warn, "No configured providers are available — skipping transcription.")
+      exit 0
+    end
+
+    active
+  else
+    whisper = WhisperBackend.new(logger)
+    unless whisper.available?
+      whisper.report_status
+      log(logger, :warn, "No transcription backend available — skipping transcription.")
+      exit 0
+    end
+    log(logger, :info, "Back-end: whisper.cpp (built-in fallback)")
+    [{ name: 'whisper_cpp', backend: whisper }]
+  end
+end
+
+def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, logger)
+  log(logger, :info, "=== Provider: #{provider[:name]} ===")
+  provider[:backend].report_status
+
+  track_results     = transcribe_audio_files(provider[:backend], audio_files, transcription_dir, events_xml, logger)
+  detected_language = track_results.filter_map { |r| r[:language] }.first
+
+  merged = {
+    'meeting_id'   => meeting_id,
+    'generated_at' => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'provider'     => provider[:name],
+    'tracks'       => track_results.map { |r| { 'file' => r[:file], 'segments' => r[:segments] } }
+  }
+  merged['language'] = detected_language if detected_language
+
+  provider_json = File.join(transcription_dir, "transcription_#{provider[:name]}.json")
+  File.write(provider_json, JSON.pretty_generate(merged))
+  log(logger, :info, "Written: #{provider_json}")
+
+  if canonical_path
+    File.write(canonical_path, JSON.pretty_generate(merged))
+    log(logger, :info, "Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+  end
+
+  {
+    name:           provider[:name],
+    track_results:  track_results,
+    ok_count:       track_results.count { |r|  r[:ok] },
+    failed_count:   track_results.count { |r| !r[:ok] },
+    total_segments: track_results.sum   { |r|  r[:segments].size }
+  }
+end
+
 # CLI
 opts = Optimist::options do
   opt :meeting_id, 'Meeting id', type: String
@@ -327,36 +435,12 @@ end
 
 log(logger, :info, "Found #{audio_files.size} audio file(s): #{audio_files.map { |f| File.basename(f) }.join(', ')}")
 
-# Select transcription back-end
-providers = normalize_transcriber_paths(transcription_props['transcriber_path'])
+providers       = get_normalized_transcriber_paths(transcription_props['transcriber_path'])
+active_backends = resolve_active_backends(providers, logger)
 
-backend = nil
-if providers.any?
-  first = providers.first
-  candidate = CustomScriptBackend.new(logger, first[:path])
-  if candidate.available?
-    backend = candidate
-    backend.report_status
-  else
-    log(logger, :warn, "Configured transcriber '#{first[:name]}' not available at: #{first[:path]}")
-  end
-end
+log(logger, :info, "Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
 
-if backend.nil?
-  whisper = WhisperBackend.new(logger)
-
-  unless whisper.available?
-    whisper.report_status
-    log(logger, :warn, "No transcription backend available — skipping transcription.")
-    exit 0
-  end
-
-  log(logger, :info, "Back-end: whisper.cpp (built-in fallback)")
-  backend = whisper
-  backend.report_status
-end
-
-# Skip if output already exists
+# Skip if canonical output already exists
 OUTPUT_JSON = File.join(transcription_dir, 'transcription.json').freeze
 
 if File.exist?(OUTPUT_JSON)
@@ -364,80 +448,26 @@ if File.exist?(OUTPUT_JSON)
   exit 0
 end
 
-# Transcribe each audio file, then merge into transcription.json
-track_results = []   # { file:, segments:, ok: }
-temp_files    = []   # paths to clean up regardless of outcome
-
 events_xml = File.join(raw_dir, 'events.xml')
 
-audio_files.each do |audio_file|
-  basename  = File.basename(audio_file)
-  temp_json = File.join(transcription_dir, ".tmp_#{basename}.json")
-  temp_files << temp_json
-
-  success = false
-  max_attempts = 5
-  wait = 5
-  max_attempts.times do |attempt|
-    File.delete(temp_json) if File.exist?(temp_json)
-    success = backend.transcribe(audio_file, temp_json, events_xml)
-    break if success
-    if attempt + 1 < max_attempts
-      log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
-      sleep(wait)
-      wait *= 2
-    end
-  end
-
-  unless success
-    track_results << { file: basename, segments: [], ok: false }
-    next
-  end
-
-  begin
-    raw      = JSON.parse(File.read(temp_json))
-    segments = (raw['transcription'] || []).map do |s|
-      { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
-    end.reject { |s| s['text'].empty? }
-
-    track_results << { file: basename, segments: segments, ok: true, language: raw['language'] }
-    log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
-  rescue JSON::ParserError => e
-    log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
-    track_results << { file: basename, segments: [], ok: false }
-  end
+provider_summaries = active_backends.each_with_index.map do |entry, idx|
+  canonical = idx.zero? ? OUTPUT_JSON : nil
+  run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical, logger)
 end
-
-detected_language = track_results.filter_map { |r| r[:language] }.first
-
-merged = {
-  'meeting_id'   => meeting_id,
-  'generated_at' => Time.now.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
-  'tracks'       => track_results.map { |r| { 'file' => r[:file], 'segments' => r[:segments] } }
-}
-merged['language'] = detected_language if detected_language
-
-File.write(OUTPUT_JSON, JSON.pretty_generate(merged))
-log(logger, :info, "Written: #{OUTPUT_JSON}")
-
-temp_files.each { |f| File.delete(f) if File.exist?(f) }
-
-# Summary
-ok_count       = track_results.count { |r|  r[:ok] }
-failed_count   = track_results.count { |r| !r[:ok] }
-total_segments = track_results.sum   { |r|  r[:segments].size }
 
 log(logger, :info, "=== Transcription complete ===")
-log(logger, :info, "  Tracks succeeded : #{ok_count} / #{audio_files.size}")
-log(logger, :info, "  Total segments   : #{total_segments}")
-log(logger, :info, "  Output           : #{OUTPUT_JSON}")
+log(logger, :info, "  Providers run    : #{provider_summaries.size}")
 
-track_results.reject { |r| r[:ok] }.each do |r|
-  log(logger, :warn, "  FAILED: #{r[:file]}")
+provider_summaries.each do |ps|
+  log(logger, :info, "  [#{ps[:name]}] tracks succeeded: #{ps[:ok_count]} / #{audio_files.size}, segments: #{ps[:total_segments]}")
+  ps[:track_results].reject { |r| r[:ok] }.each do |r|
+    log(logger, :warn, "  [#{ps[:name]}] FAILED: #{r[:file]}")
+  end
+  if ps[:failed_count] > 0
+    log(logger, :warn, "  [#{ps[:name]}] #{ps[:failed_count]} track(s) failed — partial output retained")
+  end
 end
 
-if failed_count > 0
-  log(logger, :warn, "  #{failed_count} track(s) failed — partial transcription.json retained")
-end
+log(logger, :info, "  Canonical output : #{OUTPUT_JSON}")
 
 exit 0
