@@ -47,12 +47,34 @@ require 'yaml'
 require 'json'
 require 'fileutils'
 require 'logger'
+require 'timeout'
 
 # Helpers
 def log(logger, level, msg)
   logger.send(level, msg)
   prefix = level == :error ? 'ERROR' : level == :warn ? 'WARN ' : 'INFO '
   $stdout.puts "[#{prefix}] #{msg}"
+end
+
+# Spawns a child process and waits for it to finish.
+# If timeout_seconds is given and the process exceeds it, sends SIGTERM and
+# re-raises Timeout::Error so the caller can log context and return false.
+def run_process_with_timeout(timeout_seconds, *cmd)
+  pid = Process.spawn(*cmd)
+  if timeout_seconds
+    Timeout.timeout(timeout_seconds) { Process.waitpid(pid) }
+  else
+    Process.waitpid(pid)
+  end
+  $?.success?
+rescue Timeout::Error
+  begin
+    Process.kill('TERM', pid)
+    Process.waitpid(pid)
+  rescue Errno::ESRCH, Errno::ECHILD
+    # process already gone
+  end
+  raise
 end
 
 # Accepts a single string or an array of strings. The value "disabled" (or a
@@ -159,14 +181,15 @@ class WhisperBackend
     end
   end
 
-  def transcribe(audio_file, output_json, _events_xml = nil)
+  def transcribe(audio_file, output_json, _events_xml = nil, timeout_seconds: nil)
     wav_path, temp_wav = convert_to_wav(audio_file)
     return false if wav_path.nil?
 
     output_prefix = output_json.delete_suffix('.json')
 
     log(@logger, :info, "Running whisper-cli: #{File.basename(audio_file)}")
-    ok = system(
+    ok = run_process_with_timeout(
+      timeout_seconds,
       @binary,
       '-m', @model,
       '-f', wav_path,
@@ -190,6 +213,10 @@ class WhisperBackend
 
     File.delete(temp_wav) if temp_wav && File.exist?(temp_wav)
     result
+  rescue Timeout::Error
+    log(@logger, :error, "whisper-cli timed out after #{timeout_seconds}s: #{File.basename(audio_file)}")
+    File.delete(temp_wav) if temp_wav && File.exist?(temp_wav)
+    false
   end
 
   private
@@ -253,9 +280,10 @@ class CustomScriptBackend
     log(@logger, :info, "Back-end: #{@script}")
   end
 
-  def transcribe(audio_file, output_json, events_xml)
+  def transcribe(audio_file, output_json, events_xml, timeout_seconds: nil)
     log(@logger, :info, "Running #{File.basename(@script)}: #{File.basename(audio_file)}")
-    ok = system(@script, audio_file, output_json, events_xml)
+    ok = run_process_with_timeout(timeout_seconds, @script, audio_file, output_json, events_xml,
+                                  [:out, :err] => '/dev/null')
 
     if ok && File.exist?(output_json)
       log(@logger, :info, "  -> #{File.basename(output_json)}")
@@ -264,63 +292,101 @@ class CustomScriptBackend
       log(@logger, :error, "Custom script failed for #{File.basename(audio_file)} (exit: #{$?.exitstatus})")
       false
     end
+  rescue Timeout::Error
+    log(@logger, :error, "Custom script timed out after #{timeout_seconds}s: #{File.basename(audio_file)}")
+    false
   end
 
   private
 end
 
-def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, logger)
-  track_results = []
-  temp_files    = []
+class Semaphore
+  def initialize(count)
+    @count = [count.to_i, 1].max
+    @mutex = Mutex.new
+    @cond  = ConditionVariable.new
+  end
 
-  audio_files.each do |audio_file|
-    basename  = File.basename(audio_file)
-    temp_json = File.join(transcription_dir, ".tmp_#{basename}.json")
-    temp_files << temp_json
+  def synchronize
+    acquire
+    yield
+  ensure
+    release
+  end
 
-    success = false
-    max_attempts = 5
-    wait = 5
-    max_attempts.times do |attempt|
-      File.delete(temp_json) if File.exist?(temp_json)
-      success = backend.transcribe(audio_file, temp_json, events_xml)
-      break if success
-      if attempt + 1 < max_attempts
-        log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
-        sleep(wait)
-        wait *= 2
-      end
-    end
+  private
 
-    unless success
-      track_results << { file: basename, segments: [], ok: false }
-      next
-    end
+  def acquire
+    @mutex.synchronize { @cond.wait(@mutex) while @count.zero?; @count -= 1 }
+  end
 
-    begin
-      raw      = JSON.parse(File.read(temp_json))
-      segments = (raw['transcription'] || []).map do |s|
-        { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
-      end.reject { |s| s['text'].empty? }
+  def release
+    @mutex.synchronize { @count += 1; @cond.signal }
+  end
+end
 
-      metadata = raw['metadata'] || {}
-      track_results << {
-        file:            basename,
-        segments:        segments,
-        ok:              true,
-        language:        raw['language'],
-        config:          metadata['config'],
-        quality_metrics: metadata['quality_metrics']
-      }
-      log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
-    rescue JSON::ParserError => e
-      log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
-      track_results << { file: basename, segments: [], ok: false }
+def attempt_transcription(backend, audio_file, temp_json, events_xml, logger, retry_config:)
+  basename         = File.basename(audio_file)
+  max_attempts     = retry_config[:max_attempts]
+  wait             = retry_config[:initial_wait_seconds]
+  timeout_seconds  = retry_config[:attempt_timeout_seconds]
+
+  max_attempts.times do |attempt|
+    File.delete(temp_json) if File.exist?(temp_json)
+    return true if backend.transcribe(audio_file, temp_json, events_xml, timeout_seconds: timeout_seconds)
+
+    if attempt + 1 < max_attempts
+      log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
+      sleep(wait)
+      wait *= 2
     end
   end
 
-  temp_files.each { |f| File.delete(f) if File.exist?(f) }
-  track_results
+  false
+end
+
+def parse_track_result(temp_json, basename, logger)
+  raw      = JSON.parse(File.read(temp_json))
+  segments = (raw['transcription'] || []).map do |s|
+    { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
+  end.reject { |s| s['text'].empty? }
+
+  metadata = raw['metadata'] || {}
+  log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
+
+  {
+    file:            basename,
+    segments:        segments,
+    ok:              true,
+    language:        raw['language'],
+    config:          metadata['config'],
+    quality_metrics: metadata['quality_metrics']
+  }
+rescue JSON::ParserError => e
+  log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
+  { file: basename, segments: [], ok: false }
+end
+
+def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, logger, provider_name:, semaphore:, retry_config:)
+  threads = audio_files.map do |audio_file|
+    Thread.new do
+      basename  = File.basename(audio_file)
+      temp_json = File.join(transcription_dir, ".tmp_#{provider_name}_#{basename}.json")
+
+      begin
+        success = semaphore.synchronize do
+          attempt_transcription(backend, audio_file, temp_json, events_xml, logger, retry_config: retry_config)
+        end
+        next({ file: basename, segments: [], ok: false }) unless success
+
+        parse_track_result(temp_json, basename, logger)
+      ensure
+        File.delete(temp_json) if File.exist?(temp_json)
+      end
+    end
+  end
+
+  threads.map(&:value)
 end
 
 def resolve_active_backends(providers, logger)
@@ -378,11 +444,16 @@ def aggregate_quality_metrics(track_results)
   }
 end
 
-def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, logger)
+def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, logger, audio_semaphore:, retry_config:)
   log(logger, :info, "=== Provider: #{provider[:name]} ===")
   provider[:backend].report_status
 
-  track_results     = transcribe_audio_files(provider[:backend], audio_files, transcription_dir, events_xml, logger)
+  track_results = transcribe_audio_files(
+    provider[:backend], audio_files, transcription_dir, events_xml, logger,
+    provider_name: provider[:name],
+    semaphore:     audio_semaphore,
+    retry_config:  retry_config
+  )
   detected_language = track_results.filter_map { |r| r[:language] }.first
 
   merged = {
@@ -488,10 +559,39 @@ end
 
 events_xml = File.join(raw_dir, 'events.xml')
 
-provider_summaries = active_backends.each_with_index.map do |entry, idx|
+max_parallel_providers   = (transcription_props['max_parallel_providers']   || 1).to_i
+max_parallel_audio_files = (transcription_props['max_parallel_audio_files'] || 1).to_i
+
+log(logger, :info, "Parallelism: providers=#{max_parallel_providers}, audio_files=#{max_parallel_audio_files}")
+
+retry_cfg    = transcription_props.fetch('retry', {})
+max_attempts         = (retry_cfg['max_attempts']         || 5).to_i
+initial_wait_seconds = (retry_cfg['initial_wait_seconds'] || 5).to_i
+retry_config = {
+  max_attempts:            max_attempts,
+  initial_wait_seconds:    initial_wait_seconds,
+  attempt_timeout_seconds: initial_wait_seconds * (2**max_attempts - 1)
+}
+
+log(logger, :info, "Retry: max_attempts=#{retry_config[:max_attempts]}, " \
+                   "initial_wait=#{retry_config[:initial_wait_seconds]}s, " \
+                   "timeout=#{retry_config[:attempt_timeout_seconds]}s")
+
+provider_semaphore = Semaphore.new(max_parallel_providers)
+audio_semaphore    = Semaphore.new(max_parallel_audio_files)
+
+provider_threads = active_backends.each_with_index.map do |entry, idx|
   canonical = idx.zero? ? OUTPUT_JSON : nil
-  run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical, logger)
+  Thread.new do
+    provider_semaphore.synchronize do
+      run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical, logger,
+                                 audio_semaphore: audio_semaphore,
+                                 retry_config:    retry_config)
+    end
+  end
 end
+
+provider_summaries = provider_threads.map(&:value)
 
 log(logger, :info, "=== Transcription complete ===")
 log(logger, :info, "  Providers run    : #{provider_summaries.size}")
