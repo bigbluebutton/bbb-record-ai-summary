@@ -21,6 +21,8 @@
 #   WHISPER_PROMPT                  — prompt string sent to the Whisper API (optional)
 #   WHISPER_NO_SPEECH_THRESHOLD     — reject segments with no_speech_prob above this (default: disabled)
 #   WHISPER_QUALITY_SCORE_THRESHOLD — composite quality score minimum (default 0.4)
+#   WHISPER_KNOWN_SPEAKER_NAMES     — comma-separated list of known speaker names for diarization
+#                                     (e.g. "Alice,Bob,Carol"); maps to known_speaker_names[] in the API
 #
 # OpenAI Whisper API file size limit: 25 MB per request.
 # Audio is split into per-speech chunks via events.xml before sending.
@@ -79,6 +81,7 @@ end
 #   }
 def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
                 temperature: DEFAULT_TEMPERATURE, prompt: nil,
+                known_speaker_names: nil,
                 no_speech_threshold: DEFAULT_NO_SPEECH_THRESHOLD,
                 quality_score_threshold: DEFAULT_QUALITY_SCORE_THRESHOLD)
   empty_result = { segments: [], raw_count: 0, sum_logprob: 0.0, sum_no_speech_prob: 0.0 }
@@ -97,6 +100,9 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
   body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
   body_parts << text_field(boundary, 'temperature',     temperature.to_s)
   body_parts << text_field(boundary, 'prompt',          prompt) if prompt
+  (known_speaker_names || []).each do |name|
+    body_parts << text_field(boundary, 'known_speaker_names[]', name)
+  end
   body_parts << "--#{boundary}\r\n" \
                 "Content-Disposition: form-data; name=\"file\"; " \
                 "filename=\"#{File.basename(wav_path)}\"\r\n" \
@@ -218,6 +224,13 @@ prompt = ENV['WHISPER_PROMPT'].to_s.strip
 prompt = openai_cfg['prompt'].to_s.strip if prompt.empty?
 prompt = nil if prompt.empty?
 
+known_speaker_names_raw = ENV['WHISPER_KNOWN_SPEAKER_NAMES'].to_s.strip
+known_speaker_names = if known_speaker_names_raw.empty?
+                        nil
+                      else
+                        known_speaker_names_raw.split(',').map(&:strip).reject(&:empty?).then { |a| a.empty? ? nil : a }
+                      end
+
 vad_opts = {
   enabled:         vad_cfg['enabled'] == true,
   threshold:       (vad_cfg['speech_threshold'] || 0.05).to_f,
@@ -246,6 +259,7 @@ if chunks.empty?
   }
   empty_config['no_speech_threshold'] = no_speech_threshold if no_speech_threshold != DEFAULT_NO_SPEECH_THRESHOLD
   empty_config['prompt'] = prompt if prompt
+  empty_config['known_speaker_names'] = known_speaker_names if known_speaker_names
   empty_output = { 'transcription' => [] }
   empty_output['language'] = language if language
   empty_output['metadata'] = {
@@ -293,6 +307,7 @@ http.start do |conn|
       chunk_offset_ms:         chunk_info[:from_ms],
       temperature:             temperature,
       prompt:                  prompt,
+      known_speaker_names:     known_speaker_names,
       no_speech_threshold:     no_speech_threshold,
       quality_score_threshold: quality_threshold
     )
@@ -319,6 +334,7 @@ config_block = {
 }
 config_block['no_speech_threshold'] = no_speech_threshold if no_speech_threshold != DEFAULT_NO_SPEECH_THRESHOLD
 config_block['prompt'] = prompt if prompt
+config_block['known_speaker_names'] = known_speaker_names if known_speaker_names
 
 avg_logprob        = raw_segment_total > 0 ? (sum_logprob        / raw_segment_total).round(4) : nil
 avg_no_speech_prob = raw_segment_total > 0 ? (sum_no_speech_prob / raw_segment_total).round(4) : nil

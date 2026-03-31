@@ -45,6 +45,21 @@ if audio_file && events_xml && File.exist?(events_xml)
       end
     end
   end
+
+  # Collect all unique participant names and expose them as WHISPER_KNOWN_SPEAKER_NAMES
+  # so openai_whisper.rb can pass them as known_speaker_names[] to the API.
+  # Only set if the caller has not already provided the variable.
+  if ENV['WHISPER_KNOWN_SPEAKER_NAMES'].to_s.strip.empty?
+    all_names = events_doc
+      .xpath("//event[@eventname='ParticipantJoinEvent']")
+      .filter_map { |ev| ev.at_xpath('name')&.text&.strip }
+      .uniq
+      .reject(&:empty?)
+    unless all_names.empty?
+      $stderr.puts "INFO : Known speakers: #{all_names.join(', ')}"
+      ENV['WHISPER_KNOWN_SPEAKER_NAMES'] = all_names.join(',')
+    end
+  end
 end
 
 load File.join(__dir__, 'openai_whisper.rb')
