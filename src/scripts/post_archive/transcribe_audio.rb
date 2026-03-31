@@ -303,7 +303,15 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
         { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
       end.reject { |s| s['text'].empty? }
 
-      track_results << { file: basename, segments: segments, ok: true, language: raw['language'] }
+      metadata = raw['metadata'] || {}
+      track_results << {
+        file:            basename,
+        segments:        segments,
+        ok:              true,
+        language:        raw['language'],
+        config:          metadata['config'],
+        quality_metrics: metadata['quality_metrics']
+      }
       log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
     rescue JSON::ParserError => e
       log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
@@ -344,6 +352,32 @@ def resolve_active_backends(providers, logger)
   end
 end
 
+# Sums integer quality metric fields and averages float fields across all tracks.
+# Returns nil when no track has quality_metrics (e.g. whisper.cpp fallback).
+def aggregate_quality_metrics(track_results)
+  metrics_list = track_results.filter_map { |r| r[:quality_metrics] }
+  return nil if metrics_list.empty?
+
+  logprob_values    = metrics_list.filter_map { |m| m['avg_logprob'] }
+  no_speech_values  = metrics_list.filter_map { |m| m['avg_no_speech_prob'] }
+  coverage_values   = metrics_list.filter_map { |m| m['coverage_ratio'] }
+  total_chunks      = metrics_list.sum { |m| m['total_chunks'].to_i }
+  accepted_chunks   = metrics_list.sum { |m| m['accepted_chunks'].to_i }
+
+  {
+    'total_chunks'                => total_chunks,
+    'accepted_chunks'             => accepted_chunks,
+    'rejected_chunks'             => metrics_list.sum { |m| m['rejected_chunks'].to_i },
+    'total_words'                 => metrics_list.sum { |m| m['total_words'].to_i },
+    'silence_hallucination_count' => metrics_list.sum { |m| m['silence_hallucination_count'].to_i },
+    'repetition_score'            => metrics_list.map { |m| m['repetition_score'].to_f }.then { |a| a.empty? ? 0.0 : (a.sum / a.size).round(4) },
+    'known_phrase_hits'           => metrics_list.flat_map { |m| m['known_phrase_hits'] || [] }.uniq,
+    'avg_logprob'                 => logprob_values.empty?   ? nil : (logprob_values.sum   / logprob_values.size).round(4),
+    'avg_no_speech_prob'          => no_speech_values.empty? ? nil : (no_speech_values.sum / no_speech_values.size).round(4),
+    'coverage_ratio'              => coverage_values.empty?  ? nil : (coverage_values.sum  / coverage_values.size).round(4)
+  }
+end
+
 def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, logger)
   log(logger, :info, "=== Provider: #{provider[:name]} ===")
   provider[:backend].report_status
@@ -358,6 +392,10 @@ def run_provider_transcription(provider, audio_files, transcription_dir, events_
     'tracks'       => track_results.map { |r| { 'file' => r[:file], 'segments' => r[:segments] } }
   }
   merged['language'] = detected_language if detected_language
+  provider_config  = track_results.filter_map { |r| r[:config] }.first
+  provider_metrics = aggregate_quality_metrics(track_results)
+  merged['metadata'] = { 'config' => provider_config, 'quality_metrics' => provider_metrics }.compact
+  merged.delete('metadata') if merged['metadata'].empty?
 
   provider_json = File.join(transcription_dir, "transcription_#{provider[:name]}.json")
   File.write(provider_json, JSON.pretty_generate(merged))

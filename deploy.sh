@@ -132,9 +132,7 @@ TRANSCRIPTION_SRC="$PROJECT_ROOT/src/scripts/transcription"
 TRANSCRIPTION_LIB_DIR="$BBB_LIB/transcription"
 
 mkdir -p "$TRANSCRIPTION_LIB_DIR"
-cp "$TRANSCRIPTION_SRC/openai_whisper.rb"      "$TRANSCRIPTION_LIB_DIR/openai_whisper.rb"
-cp "$TRANSCRIPTION_SRC/albert_whisper.rb"      "$TRANSCRIPTION_LIB_DIR/albert_whisper.rb"
-cp "$TRANSCRIPTION_SRC/transcription_utils.rb" "$TRANSCRIPTION_LIB_DIR/transcription_utils.rb"
+cp "$TRANSCRIPTION_SRC"/*.rb      "$TRANSCRIPTION_LIB_DIR"/
 cp "$TRANSCRIPTION_SRC/transcription.yml"      "$TRANSCRIPTION_LIB_DIR/transcription.yml"
 echo ""
 
