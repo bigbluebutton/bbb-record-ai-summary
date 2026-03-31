@@ -74,3 +74,9 @@ albert:
 
 openai:
   api_key: "your-openai-api-key-here"
+
+  # Domain context string prepended to the Whisper prompt.
+  # Only read by openai_whisper_contextual.rb — has no effect with any other backend.
+  # Example: "This is a software engineering meeting. Terms: Kubernetes, CI/CD."
+  # context_prompt: ""
+

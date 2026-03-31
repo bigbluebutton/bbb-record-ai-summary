@@ -329,6 +329,46 @@ module TranscriptionUtils
     File.delete(temp_wav) if temp_wav && File.exist?(temp_wav)
   end
 
+  # Returns the display name of the participant who owns the given audio track,
+  # or nil if no matching AudioTrackPublishedEvent/ParticipantJoinEvent pair is found.
+  #
+  # events_doc — a Nokogiri::XML::Document (already parsed)
+  # audio_file — path or basename of the audio file
+  def self.speaker_name_for_audio(events_doc, audio_file)
+    audio_basename = File.basename(audio_file.to_s)
+    track_user_id  = nil
+
+    events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").each do |ev|
+      if File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        track_user_id = ev.at_xpath('userId')&.text
+        break
+      end
+    end
+
+    return nil unless track_user_id
+
+    events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |ev|
+      if ev.at_xpath('userId')&.text == track_user_id
+        name = ev.at_xpath('name')&.text&.strip
+        return name unless name.nil? || name.empty?
+      end
+    end
+
+    nil
+  end
+
+  # Returns an array of unique non-empty participant display names from all
+  # ParticipantJoinEvents in the document.
+  #
+  # events_doc — a Nokogiri::XML::Document (already parsed)
+  def self.all_speaker_names(events_doc)
+    events_doc
+      .xpath("//event[@eventname='ParticipantJoinEvent']")
+      .filter_map { |ev| ev.at_xpath('name')&.text&.strip }
+      .uniq
+      .reject(&:empty?)
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
