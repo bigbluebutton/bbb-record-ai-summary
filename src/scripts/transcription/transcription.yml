@@ -31,9 +31,11 @@ transcriber_path: "disabled"
 # Set to 1 (default) to process sequentially and avoid overloading the server.
 #
 # max_parallel_providers:   how many transcription providers run at the same time.
-# max_parallel_audio_files: how many audio files a single provider processes at once.
+# max_parallel_audio_files: how many audio files processes at once.
 #
-# Example: 2 providers × 2 audio files = up to 4 external processes simultaneously.
+# Testing shows max_parallel_audio_files perform better in 12–14;
+#   values outside that range show increase time due to open-ai's
+#   API rate-limiter or low simultaneous process number.
 max_parallel_providers: 1
 max_parallel_audio_files: 1
 

@@ -542,12 +542,14 @@ if audio_files.empty?
   exit 0
 end
 
-log(logger, :info, "Found #{audio_files.size} audio file(s): #{audio_files.map { |f| File.basename(f) }.join(', ')}")
+log(logger, :info, "Found #{audio_files.size} audio file(s)")
 
 providers       = get_normalized_transcriber_paths(transcription_props['transcriber_path'])
 active_backends = resolve_active_backends(providers, logger)
 
 log(logger, :info, "Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
+
+start_time = Time.now
 
 # Skip if canonical output already exists
 OUTPUT_JSON = File.join(transcription_dir, 'transcription.json').freeze
@@ -607,5 +609,8 @@ provider_summaries.each do |ps|
 end
 
 log(logger, :info, "  Canonical output : #{OUTPUT_JSON}")
+log(logger, :info, "  Elapsed time  : #{(Time.now - start_time).round(1)}s")
+log(logger, :info, "  (Processes for providers: #{max_parallel_providers})")
+log(logger, :info, "  (Processes for audio files: #{max_parallel_audio_files})")
 
 exit 0
