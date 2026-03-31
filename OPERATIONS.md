@@ -5,6 +5,38 @@ This document collects the recurring server-side tasks for running and troublesh
 For initial setup, see [INSTALLATION.md](INSTALLATION.md). For packaging, source deployment, and implementation details, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 
+## Configuration
+
+### Enable multiple transcription providers
+
+Set `transcriber_path` to a list in `/etc/bigbluebutton/post-archive-transcription.yml`:
+
+```yaml
+transcriber_path:
+  - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+  - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
+
+openai:
+  api_key: "..."
+
+albert:
+  api_key: "..."
+```
+
+Each provider runs independently over all audio tracks. The **first provider** is used for LLM summarization and the HTML/PDF/Markdown report. All providers' diarized transcripts are published as separate JSON files (`transcription_<provider>.json`).
+
+To revert to a single provider or the local whisper.cpp fallback, set `transcriber_path: "disabled"` or remove the key.
+
+### Per-meeting prompt customization
+
+Append a custom instruction to the LLM system prompt via the BBB `/create` API:
+
+```
+meta_bbb-ai-summary-prompt-addition=Focus especially on technical decisions
+```
+
+The phrase is appended for both summary and action items generation. If empty or absent, the default prompt is used unchanged.
+
 ## Reprocessing
 
 ### Reprocess a recording
@@ -36,6 +68,15 @@ sudo rm -f /var/bigbluebutton/recording/status/processed/${MEETING_ID}-ai-summar
 sudo rm -f /var/bigbluebutton/recording/status/published/${MEETING_ID}-ai-summary.done
 sudo rm -rf /var/bigbluebutton/recording/process/ai-summary/${MEETING_ID}
 sudo rm -rf /var/bigbluebutton/published/ai-summary/${MEETING_ID}
+```
+
+### Test a provider against a single audio file
+
+```bash
+sudo ruby /usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb \
+  /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
+  /tmp/test_transcription.json \
+  /var/bigbluebutton/recording/raw/<meeting_id>/events.xml
 ```
 
 ## Logs and Status
