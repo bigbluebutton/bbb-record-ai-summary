@@ -15,7 +15,37 @@
 # Leave blank for auto-detection.
 language: "en"
 
+# Path to the provider script, or an array of paths for multiple providers.
+# Use "disabled" (or omit) to skip custom providers and fall back to whisper.cpp.
+#
+# Single provider:
+#   transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/transcribe.rb"
+#
+# Multiple providers (run in order; duplicate names are ignored):
+#   transcriber_path:
+#     - "/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb"
+#     - "/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb"
 transcriber_path: "disabled"
+
+# Parallelism — how many tasks may run concurrently.
+# Set to 1 (default) to process sequentially and avoid overloading the server.
+#
+# max_parallel_providers:   how many transcription providers run at the same time.
+# max_parallel_audio_files: how many audio files processes at once.
+#
+# Testing shows max_parallel_audio_files perform better in 12–14;
+#   values outside that range show increase time due to open-ai's
+#   API rate-limiter or low simultaneous process number.
+max_parallel_providers: 1
+max_parallel_audio_files: 1
+
+# Per-attempt retry settings.
+# attempt_timeout_seconds is derived automatically as the total exponential wait
+# budget: initial_wait_seconds * (2^max_attempts - 1).
+# With the defaults below that is 5 * (2^5 - 1) = 155s per attempt.
+retry:
+  max_attempts: 5
+  initial_wait_seconds: 5
 
 # Voice Activity Detection — filters out chunks with little or no detected speech
 # before sending them to the API.
@@ -44,3 +74,9 @@ albert:
 
 openai:
   api_key: "your-openai-api-key-here"
+
+  # Domain context string prepended to the Whisper prompt.
+  # Only read by openai_whisper_contextual.rb — has no effect with any other backend.
+  # Example: "This is a software engineering meeting. Terms: Kubernetes, CI/CD."
+  # context_prompt: ""
+

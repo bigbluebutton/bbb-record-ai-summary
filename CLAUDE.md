@@ -184,12 +184,12 @@ All extractors are defined **inline in `process/ai-summary.rb`** under the `Extr
 
 ### TranscriptExtractor
 
-Reads `raw/<meeting_id>/transcription/transcription.json` produced by the post_archive script. It does **not** invoke whisper directly.
+Reads `raw/<meeting_id>/transcription/transcription.json` (canonical first-provider output). Logs the `"provider"` field if present. Does **not** invoke whisper directly.
 
-- Maps audio file basenames to speakers via `AudioTrackPublishedEvent` in `events.xml`
+- `build_segments_from_tracks` (private) — maps tracks to speakers via `AudioTrackPublishedEvent`, returns flat sorted segment list; falls back to `"Unknown Speaker"` if no speaker mapping found
 - Uses `BigBlueButton::Events.first_event_timestamp(events_doc)` as the recording start time
-- Merges segments into WebVTT cues, splitting on speaker change or when cue exceeds `MAX_CUE_CHARS = 200` or `MAX_CUE_DURATION_MS = 15_000`
-- Falls back to `"Unknown Speaker"` if no speaker mapping found
+- `create_transcription_cues` merges segments into cues, splitting on speaker change or when cue exceeds `MAX_CUE_CHARS = 200` or `MAX_CUE_DURATION_MS = 15_000`
+- `diarize_provider_transcriptions` (public) — called after `extract`; finds all `transcription_<name>.json` in the raw transcription dir, applies the same pipeline to each, writes `transcript_diarized_<name>.json` to the process dir
 
 ### Template Variables
 
@@ -208,21 +208,22 @@ Key operations:
 1. Parses meeting ID: strips `-ai-summary` suffix via `delete_suffix` (not a simple last-hyphen split, because the format name contains a hyphen)
 2. Early exit if format is not `ai-summary`
 3. Converts `ai-summary.md` to PDF with `pandoc --pdf-engine=xelatex` (falls back to original PDF)
-4. Updates `metadata.xml` with `state="published"`, playback link, duration
-5. Copies files to final publish dir (`/var/bigbluebutton/published/ai-summary/<meeting_id>/`)
-6. Cleans up process and publish staging dirs
-7. Creates `.done` or `.fail` status file in `recording/status/published/`
+4. Calls `copy_provider_transcriptions` — globs `transcript_diarized_<name>.json` from process dir, copies each as `transcription_<name>.json` to the publish target
+5. Updates `metadata.xml` with `state="published"`, playback link, duration, and a `<url>` entry per provider transcription file
+6. Copies files to final publish dir (`/var/bigbluebutton/published/ai-summary/<meeting_id>/`)
+7. Cleans up process and publish staging dirs
+8. Creates `.done` or `.fail` status file in `recording/status/published/`
 
 ## Post-Archive Stage (`src/scripts/post_archive/transcribe_audio.rb`)
 
 **Trigger:** Registered as a BBB post_archive hook, runs after Archive stage
-**Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
+**Output:** `recording/raw/<meeting_id>/transcription/`
 
-Transcription back-end selection (priority order):
-1. **Provider Ruby script** — `transcribe.rb` in the transcription lib dir (production: `/usr/local/bigbluebutton/core/lib/transcription/`, dev: `src/scripts/transcription/`). Deploy via `deploy_transcription.sh` or debconf selection. Both `openai_whisper.rb` and `albert_whisper.rb` are installed; the chosen one is symlinked as `transcribe.rb`.
-2. **whisper.cpp** — built-in fallback, searches multiple known paths; converts audio to 16 kHz WAV via ffmpeg
-
-`transcription.yml` (alongside `transcribe.rb`) configures the active backend. API keys can be set via `ALBERT_API_KEY`/`OPENAI_API_KEY` env vars (take priority) or in the YAML.
+`transcriber_path` in `transcription.yml` accepts a single string or an array. Key helpers:
+- `normalize_transcriber_paths(raw)` — coerces to `[{path:, name:}]`, strips `.rb` for the name, deduplicates by name (first wins), skips `"disabled"`
+- `resolve_active_backends(providers, logger)` — probes each path; falls back to `WhisperBackend` when no custom providers are configured
+- `transcribe_audio_files(backend, ...)` — per-audio retry loop, returns `[{file:, segments:, ok:, language:}]`
+- `run_provider_transcription(provider, ...)` — runs one provider end-to-end; writes `transcription_<name>.json`; writes canonical `transcription.json` for the first provider only (signalled via `canonical_path` argument)
 
 If `transcription.json` already exists, the script exits early (delete it to re-run).
 
@@ -230,7 +231,7 @@ If `transcription.json` already exists, the script exits early (delete it to re-
 
 Both `openai_whisper.rb` and `albert_whisper.rb` are called as:
 ```
-transcribe.rb <audio_file> <output_json_file> <events_xml_file>
+<provider_script> <audio_file> <output_json_file> <events_xml_file>
 ```
 
 Both share `transcription_utils.rb` (same directory) for chunk preparation:
@@ -244,9 +245,9 @@ Both share `transcription_utils.rb` (same directory) for chunk preparation:
 
 **OpenAI provider** (`openai_whisper.rb`): enforces 25 MB per-chunk limit; filters segments using a quality score derived from `no_speech_prob` and `compression_ratio` (threshold 0.4); uses `verbose_json` response format with segment-level timestamps. Config nested under `openai:` key in `transcription.yml`.
 
-Output format:
+Raw output format (per provider file, includes `"provider"` field):
 ```json
-{ "meeting_id": "...", "generated_at": "...", "tracks": [
+{ "meeting_id": "...", "generated_at": "...", "provider": "openai_whisper", "tracks": [
   { "file": "audio_basename.webm", "segments": [
     { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello." }
   ]}

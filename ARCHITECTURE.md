@@ -57,28 +57,30 @@ steps:
 **Trigger:** Runs after the Archive stage, before Sanity
 **Invocation:** `cd /usr/local/bigbluebutton/core && bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>`
 
-Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `webm opus mp3 wav ogg m4a flac`) and transcribes each one.
+Discovers all audio files in `recording/raw/<meeting_id>/audio/` (extensions: `webm opus mp3 wav ogg m4a flac`) and transcribes each one using each configured provider.
 
 **Transcription back-end (priority order):**
 
-1. **Provider script** — if `transcriber_path` in `transcription.yml` points to a valid executable, it is called as:
+1. **Provider script(s)** — `transcriber_path` in `transcription.yml` accepts a single path string or an array. Each entry is resolved via `normalize_transcriber_paths` (strips `.rb`, deduplicates by name). Available providers are probed with `resolve_active_backends`; unavailable ones are skipped with a warning. Each active provider is run via `run_provider_transcription`, which calls the script as:
    ```
    <transcriber_path> <audio_file> <output_json_file> <events_xml_file>
    ```
-   The script must produce a JSON file at `<output_json_file>` with this structure:
+   The script must produce a JSON file with this structure:
    ```json
    { "transcription": [{ "offsets": { "from": <ms>, "to": <ms> }, "text": "..." }] }
    ```
-   Both bundled providers (`openai_whisper.rb`, `albert_whisper.rb`) use `transcription_utils.rb` to split the audio into per-speech chunks via `events.xml` talking cues before sending to the API.
 
-2. **whisper.cpp fallback** — used when `transcriber_path` is absent, `"disabled"`, or points to a non-executable path. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`. The `-oj` flag produces segment-level JSON output.
+2. **whisper.cpp fallback** — used when `transcriber_path` is absent, `"disabled"`, or no configured providers are available. Audio is converted to 16 kHz mono WAV via ffmpeg before passing to `whisper-cli`.
 
-**Output:** `recording/raw/<meeting_id>/transcription/transcription.json`
+**Output:** `recording/raw/<meeting_id>/transcription/`
+
+Each provider writes `transcription_<name>.json`. The first provider's output is also written as the canonical `transcription.json` (read by the process stage). All files share the same structure with an added `"provider"` field:
 
 ```json
 {
   "meeting_id": "1b30d714...-1760738236204",
   "generated_at": "2025-01-15T10:23:00Z",
+  "provider": "openai_whisper",
   "tracks": [
     {
       "file": "audio-track-name.webm",
@@ -109,21 +111,24 @@ raw/<meeting_id>/
 │   ├── <user_id>.webm
 │   └── ...
 └── transcription/
-    └── transcription.json          # Produced by post_archive hook
+    ├── transcription.json              # Canonical (first provider) — read by process stage
+    ├── transcription_<provider>.json   # Per-provider raw output (one file per provider)
+    └── ...
 ```
 
 **Output directory:** `recording/process/ai-summary/<meeting_id>/`
 ```
 process/ai-summary/<meeting_id>/
-├── ai-summary.pdf                  # Original notes PDF
-├── ai-summary.md                   # Rendered markdown report
-├── ai-summary.html                 # Rendered HTML report
-├── transcript.txt                  # Plain text, speaker-grouped
-├── transcript_diarized.vtt         # WebVTT with speaker labels
-├── transcript_diarized.json        # Diarized transcript as JSON (speaker, timestamps, text)
-├── summary.txt                     # LLM summary (if enabled)
-├── action_items.json               # LLM action items (if enabled)
-└── metadata.xml                    # state="processed"
+├── ai-summary.pdf                      # Original notes PDF
+├── ai-summary.md                       # Rendered markdown report
+├── ai-summary.html                     # Rendered HTML report
+├── transcript.txt                      # Plain text, speaker-grouped
+├── transcript_diarized.vtt             # WebVTT with speaker labels (first provider)
+├── transcript_diarized.json            # Diarized JSON (first provider)
+├── transcript_diarized_<provider>.json # Diarized JSON for each additional provider
+├── summary.txt                         # LLM summary (if enabled)
+├── action_items.json                   # LLM action items (if enabled)
+└── metadata.xml                        # state="processed"
 ```
 
 #### Extractor Module
@@ -143,16 +148,17 @@ All extractors live inline in `process/ai-summary.rb` under `module Extractors`.
 - Returns array of `{ id:, question:, answers: [{text:, votes:}] }`
 
 **`TranscriptExtractor`**
-- Reads `transcription.json`
+- Reads `transcription.json` (canonical first-provider output); logs the `"provider"` field if present
 - Builds speaker-to-audio-file mapping from `AudioTrackPublishedEvent` in `events.xml`
 - Uses `BigBlueButton::Events.first_event_timestamp(events_doc)` for the recording start time
 - Converts absolute UTC timestamps to recording-relative offsets for WebVTT
-- Merges consecutive segments from the same speaker into cues, splitting when:
+- Segment-to-cue merging is handled by `build_segments_from_tracks` (private) and `create_transcription_cues`, splitting when:
   - Speaker changes
   - Cue text exceeds `MAX_CUE_CHARS = 200`
   - Cue duration exceeds `MAX_CUE_DURATION_MS = 15_000`
 - Long cues are further split at sentence boundaries (`.!?`) with proportional timestamp interpolation
 - Returns `{ plain: String, diarized: String }` (WebVTT)
+- **`diarize_provider_transcriptions`** (public, called after `extract`) — finds all `transcription_<name>.json` files in the raw transcription dir, applies the same diarization pipeline to each, and writes `transcript_diarized_<name>.json` to the process dir
 
 **`SummaryExtractor`**
 - Combines notes content, plain transcript, polls, and chat messages
@@ -187,11 +193,12 @@ The BBB framework appends `-<format>` to the meeting ID when invoking publish sc
 1. Early exit if not invoked with the `-ai-summary` suffix
 2. Early exit if `$publish_dir/<meeting_id>/` already exists (idempotent)
 3. Convert `ai-summary.md` → `ai-summary.pdf` via `pandoc --pdf-engine=pdflatex`; fall back to original PDF on failure
-4. Copy `metadata.xml` from process dir; update with `state="published"`, playback link, duration
-5. Add raw/playback size metadata
-6. Copy staging dir to `$publish_dir/<meeting_id>/`
-7. Remove process and staging dirs
-8. Write `.done` or `.fail` status file
+4. Copy all `transcript_diarized_<provider>.json` files from process dir as `transcription_<provider>.json`
+5. Copy `metadata.xml` from process dir; update with `state="published"`, playback link, duration, and a `<url>` entry for each provider transcription file
+6. Add raw/playback size metadata
+7. Copy staging dir to `$publish_dir/<meeting_id>/`
+8. Remove process and staging dirs
+9. Write `.done` or `.fail` status file
 
 **Playback link format:**
 ```
@@ -301,8 +308,9 @@ audio/*.webm ──┐               │  │  │  ├── NotesExtractor
   ├── ai-summary.md
   ├── ai-summary.html
   ├── transcription.vtt
-  ├── transcription.json
-  └── metadata.xml  (state=published, playback link, duration)
+  ├── transcription.json              (diarized, first provider)
+  ├── transcription_<provider>.json   (diarized, one per additional provider)
+  └── metadata.xml  (state=published, playback link, duration, per-provider URLs)
 ```
 
 ---

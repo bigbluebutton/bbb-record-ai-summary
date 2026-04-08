@@ -452,6 +452,9 @@ module Extractors
         return nil
       end
 
+      provider = json_data['provider']
+      logger.info("Using transcription from provider: #{provider}") if provider
+
       tracks_data = json_data['tracks'] || []
 
       if tracks_data.empty?
@@ -473,39 +476,7 @@ module Extractors
         return nil
       end
 
-      # Build a flat list of segments with absolute timestamps and speaker attribution
-      segments = []
-
-      tracks_data.each do |track|
-        file_basename = track['file']
-        track_info    = audio_tracks[file_basename]
-
-        unless track_info
-          logger.warn("No speaker mapping for audio track '#{file_basename}', " \
-                      "attributing to 'Unknown Speaker'")
-          track_info = {
-            user_id:       file_basename,
-            name:          'Unknown Speaker',
-            timestamp_utc: recording_start
-          }
-        end
-
-        (track['segments'] || []).each do |seg|
-          text = seg['text'].to_s.strip
-          next if text.empty?
-
-          from_ms = seg.dig('offsets', 'from').to_i
-          to_ms   = seg.dig('offsets', 'to').to_i
-
-          segments << {
-            abs_start: track_info[:timestamp_utc] + from_ms,
-            abs_end:   track_info[:timestamp_utc] + to_ms,
-            user_id:   track_info[:user_id],
-            name:      track_info[:name],
-            text:      text
-          }
-        end
-      end
+      segments = build_segments_from_tracks(tracks_data, audio_tracks, recording_start, logger)
 
       if segments.empty?
         logger.warn("No transcript segments found in transcription.json")
@@ -540,7 +511,68 @@ module Extractors
       { plain: plain_text, diarized: diarized_vtt, language: json_data['language'], recording_start: recording_start }
     end
 
+    def self.diarize_provider_transcriptions(raw_archive_dir, target_dir, logger, events_doc)
+      recording_start = extract_recording_start_time(events_doc, logger)
+      return [] unless recording_start
+
+      audio_tracks   = extract_audio_track_mappings(events_doc, logger)
+      provider_files = Dir.glob("#{raw_archive_dir}/transcription/transcription_*.json").sort
+      return [] if provider_files.empty?
+
+      provider_files.filter_map do |src|
+        provider_name = File.basename(src, '.json').delete_prefix('transcription_')
+        begin
+          json_data = JSON.parse(File.read(src))
+        rescue JSON::ParserError => e
+          logger.error("Failed to parse #{File.basename(src)}: #{e.message}")
+          next
+        end
+
+        segments = build_segments_from_tracks(json_data['tracks'] || [], audio_tracks, recording_start, logger)
+        if segments.empty?
+          logger.warn("No segments in #{File.basename(src)}, skipping diarization")
+          next
+        end
+
+        segments.sort_by! { |s| s[:abs_start] }
+        cues          = create_transcription_cues(segments, recording_start, logger)
+        diarized_json = format_cues_into_json(cues)
+        out_file      = "#{target_dir}/transcript_diarized_#{provider_name}.json"
+        File.write(out_file, JSON.pretty_generate(diarized_json))
+        logger.info("Saved diarized transcript for provider '#{provider_name}': #{out_file}")
+        provider_name
+      end
+    end
+
     private
+
+    def self.build_segments_from_tracks(tracks_data, audio_tracks, recording_start, logger)
+      segments = []
+      tracks_data.each do |track|
+        file_basename = track['file']
+        track_info    = audio_tracks[file_basename]
+
+        unless track_info
+          logger.warn("No speaker mapping for audio track '#{file_basename}', " \
+                      "attributing to 'Unknown Speaker'")
+          track_info = { user_id: file_basename, name: 'Unknown Speaker', timestamp_utc: recording_start }
+        end
+
+        (track['segments'] || []).each do |seg|
+          text = seg['text'].to_s.strip
+          next if text.empty?
+
+          segments << {
+            abs_start: track_info[:timestamp_utc] + seg.dig('offsets', 'from').to_i,
+            abs_end:   track_info[:timestamp_utc] + seg.dig('offsets', 'to').to_i,
+            user_id:   track_info[:user_id],
+            name:      track_info[:name],
+            text:      text
+          }
+        end
+      end
+      segments
+    end
 
     # Format milliseconds as "HH:MM:SS.mmm"
     def self.format_timestamp(ms)
@@ -1151,6 +1183,8 @@ unless FileTest.directory?(target_dir)
     attendees = Extractors::AttendeesExtractor.extract(events_doc, BigBlueButton.logger)
 
     transcript = Extractors::TranscriptExtractor.extract(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc, format_props)
+
+    Extractors::TranscriptExtractor.diarize_provider_transcriptions(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc)
 
     if transcript.nil?
       BigBlueButton.logger.error("No transcription available for #{meeting_id}. Run post_archive/transcribe_audio.rb first.")

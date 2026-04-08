@@ -92,7 +92,7 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_
 end
 
 # Helper method to update metadata.xml with playback information
-def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, logger)
+def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, provider_transcription_files, logger)
   logger.info("Updating metadata.xml with playback information")
 
   metadata = Nokogiri::XML(File.open(metadata_path))
@@ -116,6 +116,9 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
         xml.urls {
           xml.url("#{base_url}/ai-summary.#{format}", type: format)
           xml.url("#{base_url}/transcription.json", type: "json")
+          provider_transcription_files.each do |filename|
+            xml.url("#{base_url}/#{filename}", type: "json")
+          end
         }
       }
     }
@@ -125,6 +128,16 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
   formatted = Nokogiri::XML(metadata.to_xml) { |x| x.noblanks }
   File.write(metadata_path, formatted.root)
   logger.info("Added playback to metadata.xml")
+end
+
+def copy_provider_transcriptions(process_dir, target_dir, logger)
+  Dir.glob("#{process_dir}/transcript_diarized_*.json").sort.map do |src|
+    provider_name = File.basename(src, '.json').delete_prefix('transcript_diarized_')
+    dest_name     = "transcription_#{provider_name}.json"
+    FileUtils.cp(src, "#{target_dir}/#{dest_name}")
+    logger.info("Copied #{dest_name} to publish directory")
+    dest_name
+  end
 end
 
 def copy_process_file_to_publish_dir(filename_source, filename_target, process_dir, target_dir, logger)
@@ -208,6 +221,8 @@ begin
   
   copy_process_file_to_publish_dir("transcript_diarized.json", "transcription.json", process_dir, target_dir, BigBlueButton.logger)
 
+  provider_transcription_files = copy_provider_transcriptions(process_dir, target_dir, BigBlueButton.logger)
+
   # Get recording duration
   events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
   recording_time = BigBlueButton::Events.get_recording_length(events_doc)
@@ -218,7 +233,7 @@ begin
   BigBlueButton.logger.info("Copied metadata.xml file")
 
   metadata_path = "#{target_dir}/metadata.xml"
-  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, BigBlueButton.logger)
+  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, provider_transcription_files, BigBlueButton.logger)
 
   # Ensure publish directory exists
   FileUtils.mkdir_p(publish_dir) unless FileTest.directory?(publish_dir)
