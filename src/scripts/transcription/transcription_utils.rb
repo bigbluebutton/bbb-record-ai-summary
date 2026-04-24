@@ -157,19 +157,6 @@ module TranscriptionUtils
     [temp_wav, temp_wav]
   end
 
-  # Scans events.xml and returns per-speech cues for the given audio file.
-  #
-  # livekit: true  — SFU path: cues from AudioTrackPublishedEvent + ParticipantTalkingEvent
-  #                  filtered by the track's user_id. Offsets relative to the track's
-  #                  timestampUTC (nanoseconds preserved as-is for ffmpeg-safe arithmetic).
-  # livekit: false — FreeSWITCH path: all ParticipantTalkingEvent entries within the
-  #                  StartRecordingEvent/StopRecordingEvent window. Offsets in ms relative
-  #                  to the recording start (uses the event timestamp attribute, not timestampUTC).
-  def self.extract_talking_cues(events_doc, audio_file, livekit: true)
-    livekit ? extract_talking_cues_livekit(events_doc, audio_file)
-            : extract_talking_cues_freeswitch(events_doc, audio_file)
-  end
-
   # Returns one cue covering the full recording interval for the given audio file.
   # Used as a fallback when no ParticipantTalkingEvents are present.
   #
@@ -253,16 +240,16 @@ module TranscriptionUtils
       log_info "Audio backend auto-detected: #{livekit ? 'livekit' : 'freeswitch'}"
     end
 
-    raw_cues = extract_talking_cues(events_doc, audio_file, livekit: livekit)
-
     if livekit
-      cues = merge_nearby_cues(raw_cues, merge_gap_ms)
-      log_info "Talking cues: #{raw_cues.size} raw → #{cues.size} after merging (gap ≤ #{merge_gap_ms}ms)"
+      raw_cues_livekit = extract_talking_cues_livekit(events_doc, audio_file)
+      cues = merge_nearby_cues(raw_cues_livekit, merge_gap_ms)
+      log_info "Talking cues: #{raw_cues_livekit.size} raw → #{cues.size} after merging (gap ≤ #{merge_gap_ms}ms)"
     else
-      cues = separate_speakers(raw_cues)
+      speaker_cues_freeswitch = extract_talking_cues_freeswitch(events_doc, audio_file)
+      cues = speaker_cues_freeswitch
                .flat_map { |group| merge_nearby_cues(group, merge_gap_ms) }
                .sort_by { |c| c['from'] }
-      log_info "Talking cues: #{raw_cues.size} raw → #{cues.size} after per-speaker merging (gap ≤ #{merge_gap_ms}ms)"
+      log_info "Talking cues: #{speaker_cues_freeswitch.sum(&:size)} raw → #{cues.size} after per-speaker merging (gap ≤ #{merge_gap_ms}ms)"
     end
 
     if cues.empty?
@@ -452,8 +439,8 @@ module TranscriptionUtils
     end
 
     # Track each user's open cue independently so simultaneous speakers don't interfere.
-    open_cues = {}  # user_id => cue_start_ts
-    cues      = []
+    open_cues    = {}                              # user_id => cue_start_ts
+    speaker_cues = Hash.new { |h, k| h[k] = [] } # user_id => [cues]
 
     events_doc.xpath('//event').each do |ev|
       next unless ev['eventname'] == 'ParticipantTalkingEvent'
@@ -471,7 +458,7 @@ module TranscriptionUtils
         cue = { 'from' => cue_start_ts - recording_start_ts,
                 'to'   => ts - recording_start_ts }
         cue['speaker_id'] = user_id if user_id
-        cues << cue
+        speaker_cues[user_id || :unknown] << cue
       end
     end
 
@@ -481,21 +468,24 @@ module TranscriptionUtils
       cue = { 'from' => cue_start_ts - recording_start_ts,
               'to'   => boundary_ts - recording_start_ts }
       cue['speaker_id'] = user_id if user_id
-      cues << cue
+      speaker_cues[user_id || :unknown] << cue
     end
 
     if floor_intervals.any?
-      before = cues.size
-      cues.select! do |cue|
-        (floor_intervals[cue['speaker_id']] || []).any? do |gained, lost|
-          gained <= cue['to'] && lost >= cue['from']
+      before = speaker_cues.values.sum(&:size)
+      speaker_cues.each_value do |cues|
+        cues.select! do |cue|
+          (floor_intervals[cue['speaker_id']] || []).any? do |gained, lost|
+            gained <= cue['to'] && lost >= cue['from']
+          end
         end
       end
-      dropped = before - cues.size
+      speaker_cues.reject! { |_, cues| cues.empty? }
+      dropped = before - speaker_cues.values.sum(&:size)
       log_info "Floor filter: dropped #{dropped} cue(s) with no floor overlap" if dropped > 0
     end
 
-    cues.sort_by { |c| c['from'] }
+    speaker_cues.values
   end
 
   # LiveKit floor fallback: one interval per AudioTrackPublished/Unpublished pair.
@@ -552,12 +542,6 @@ module TranscriptionUtils
   end
 
   # Groups a flat array of cues by speaker_id so each group can be merged independently.
-  def self.separate_speakers(cues)
-    groups = {}
-    cues.each { |cue| (groups[cue['speaker_id'] || :unknown] ||= []) << cue }
-    groups.values
-  end
-
   def self.log_info(msg)
     if defined?($logger) && $logger
       $logger.info(msg)
@@ -567,7 +551,7 @@ module TranscriptionUtils
     end
   end
 
-  private_class_method :log_info, :separate_speakers,
+  private_class_method :log_info,
                        :extract_talking_cues_livekit, :extract_talking_cues_freeswitch,
                        :extract_floor_cues_livekit, :extract_floor_cues_freeswitch
 end
