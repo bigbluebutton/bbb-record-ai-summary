@@ -183,6 +183,43 @@ module TranscriptionUtils
     merged
   end
 
+  # Splits a flat array of (possibly overlapping) cues into non-overlapping segments.
+  def self.resolve_overlapping_cues(cues)
+    return cues if cues.size < 2
+
+    events = []
+    cues.each do |cue|
+      events << [cue['from'], :start, cue]
+      events << [cue['to'],   :end,   cue]
+    end
+
+    segments  = []
+    active    = []
+    prev_time = nil
+
+    events.group_by { |e| e[0] }.sort_by { |t, _| t }.each do |time, grp|
+      if prev_time && time > prev_time && active.any?
+        seg = { 'from' => prev_time, 'to' => time }
+        if active.size == 1
+          c = active.first
+          seg['speaker_id'] = c['speaker_id'] if c['speaker_id']
+          seg['speaker']    = c['speaker']    if c['speaker']
+        else
+          seg['speaker_ids'] = active.map { |c| c['speaker_id'] }.compact.uniq
+        end
+        segments << seg
+      end
+
+      grp.sort_by { |e| e[1] == :end ? 0 : 1 }.each do |e|
+        e[1] == :end ? active.reject! { |c| c.equal?(e[2]) } : active << e[2]
+      end
+
+      prev_time = time
+    end
+
+    segments
+  end
+
   # Cuts a time slice from wav_path with ffmpeg into output_path.
   # Returns output_path on success, nil on failure.
   def self.cut_audio_chunk(wav_path, from_ms, to_ms, output_path)
@@ -246,10 +283,11 @@ module TranscriptionUtils
       log_info "Talking cues: #{raw_cues_livekit.size} raw → #{cues.size} after merging (gap ≤ #{merge_gap_ms}ms)"
     else
       speaker_cues_freeswitch = extract_talking_cues_freeswitch(events_doc, audio_file)
-      cues = speaker_cues_freeswitch
-               .flat_map { |group| merge_nearby_cues(group, merge_gap_ms) }
-               .sort_by { |c| c['from'] }
-      log_info "Talking cues: #{speaker_cues_freeswitch.sum(&:size)} raw → #{cues.size} after per-speaker merging (gap ≤ #{merge_gap_ms}ms)"
+      merged_cues = speaker_cues_freeswitch
+                      .flat_map { |group| merge_nearby_cues(group, merge_gap_ms) }
+                      .sort_by { |c| c['from'] }
+      cues = resolve_overlapping_cues(merged_cues)
+      log_info "Talking cues: #{speaker_cues_freeswitch.sum(&:size)} raw → #{merged_cues.size} merged → #{cues.size} after overlap resolution (gap ≤ #{merge_gap_ms}ms)"
     end
 
     if cues.empty?
@@ -287,8 +325,9 @@ module TranscriptionUtils
       end
 
       chunk = { path: path, from_ms: from_ms, to_ms: to_ms }
-      chunk[:speaker_id] = cue['speaker_id'] if cue['speaker_id']
-      chunk[:speaker]    = cue['speaker']    if cue['speaker']
+      chunk[:speaker_id]  = cue['speaker_id']  if cue['speaker_id']
+      chunk[:speaker]     = cue['speaker']     if cue['speaker']
+      chunk[:speaker_ids] = cue['speaker_ids'] if cue['speaker_ids']
       chunks << chunk
     end
 
@@ -552,6 +591,7 @@ module TranscriptionUtils
   end
 
   private_class_method :log_info,
+                       :resolve_overlapping_cues,
                        :extract_talking_cues_livekit, :extract_talking_cues_freeswitch,
                        :extract_floor_cues_livekit, :extract_floor_cues_freeswitch
 end

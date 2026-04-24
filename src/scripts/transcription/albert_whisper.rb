@@ -310,7 +310,11 @@ http.start do |conn|
     end
 
     seg = { 'offsets' => { 'from' => from_ms, 'to' => to_ms }, 'text' => text }
-    seg['speaker_id'] = chunk_info[:speaker_id] if chunk_info[:speaker_id]
+    if chunk_info[:speaker_ids]
+      seg['speaker_ids'] = chunk_info[:speaker_ids]
+    elsif chunk_info[:speaker_id]
+      seg['speaker_id'] = chunk_info[:speaker_id]
+    end
     segments << seg
   end
 end

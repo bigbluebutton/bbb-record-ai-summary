@@ -228,7 +228,8 @@ def parse_track_result(temp_json, basename, logger)
   raw      = JSON.parse(File.read(temp_json))
   segments = (raw['transcription'] || []).map do |s|
     seg = { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
-    seg['speaker_id'] = s['speaker_id'] if s['speaker_id']
+    seg['speaker_id']  = s['speaker_id']  if s['speaker_id']
+    seg['speaker_ids'] = s['speaker_ids'] if s['speaker_ids']
     seg
   end.reject { |s| s['text'].empty? }
 

@@ -562,11 +562,19 @@ module Extractors
           text = seg['text'].to_s.strip
           next if text.empty?
 
-          # FreeSWITCH: per-segment speaker_id carries the userId directly.
-          # Look it up in audio_tracks (which includes userId-keyed entries) for name resolution.
-          speaker = seg['speaker_id'] && audio_tracks[seg['speaker_id']]
-          user_id = speaker ? speaker[:user_id] : track_info[:user_id]
-          name    = speaker ? speaker[:name]    : track_info[:name]
+          # FreeSWITCH: per-segment speaker_id or speaker_ids carries the userId(s).
+          if (ids = seg['speaker_ids'])&.any?
+            speaker_names = ids.filter_map { |uid| audio_tracks.dig(uid, :name) }
+            speaker_names = [track_info[:name]] if speaker_names.empty?
+            user_id = ids.join('|')
+            name    = speaker_names.join(' & ')
+          elsif (sp = seg['speaker_id'] && audio_tracks[seg['speaker_id']])
+            user_id = sp[:user_id]
+            name    = sp[:name]
+          else
+            user_id = track_info[:user_id]
+            name    = track_info[:name]
+          end
 
           segments << {
             abs_start: track_info[:timestamp_utc] + seg.dig('offsets', 'from').to_i,

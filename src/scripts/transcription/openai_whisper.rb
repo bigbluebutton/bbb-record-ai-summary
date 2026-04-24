@@ -313,7 +313,9 @@ http.start do |conn|
       quality_score_threshold: quality_threshold
     )
     info "  → #{result_chunk[:segments].size} segment(s) (#{result_chunk[:raw_count]} raw)"
-    if chunk_info[:speaker_id]
+    if chunk_info[:speaker_ids]
+      result_chunk[:segments].each { |s| s['speaker_ids'] = chunk_info[:speaker_ids] }
+    elsif chunk_info[:speaker_id]
       result_chunk[:segments].each { |s| s['speaker_id'] = chunk_info[:speaker_id] }
     end
     segments.concat(result_chunk[:segments])
