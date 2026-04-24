@@ -241,9 +241,11 @@ vad_opts = {
 }
 
 # Prepare audio chunks (VAD filtering applied inside)
+livekit = ENV.fetch('BBB_AUDIO_BACKEND', 'livekit') != 'freeswitch'
 result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
+                                                 livekit:      livekit,
                                                  merge_gap_ms: TranscriptionUtils::MERGE_GAP_MS,
-                                                 vad: vad_opts)
+                                                 vad:          vad_opts)
 die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
 
 info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
@@ -307,7 +309,9 @@ http.start do |conn|
       end
     end
 
-    segments << { 'offsets' => { 'from' => from_ms, 'to' => to_ms }, 'text' => text }
+    seg = { 'offsets' => { 'from' => from_ms, 'to' => to_ms }, 'text' => text }
+    seg['speaker_id'] = chunk_info[:speaker_id] if chunk_info[:speaker_id]
+    segments << seg
   end
 end
 

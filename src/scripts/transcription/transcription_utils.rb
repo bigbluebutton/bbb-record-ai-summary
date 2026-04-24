@@ -7,10 +7,22 @@
 # so each provider (albert_whisper, openai_whisper, …) can process them independently.
 # Optionally filters silent chunks via Voice Activity Detection (VAD) before returning.
 #
+# Two audio backends are supported, selected via the livekit: parameter:
+#
+#   livekit: true  (default) — SFU / bbb-webrtc-sfu / LiveKit
+#     One OGG file per participant. Talking cues derived from AudioTrackPublishedEvent
+#     and ParticipantTalkingEvent. Floor fallback uses AudioTrackPublished/Unpublished.
+#
+#   livekit: false — FreeSWITCH (legacy single mixed file)
+#     One WAV/Opus file for the whole room. Talking cues derived from all
+#     ParticipantTalkingEvent entries within the StartRecordingEvent/StopRecordingEvent
+#     window. Floor fallback uses the full recording interval.
+#
 # Usage:
 #   require_relative 'transcription_utils'
 #
 #   result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
+#              livekit: true,
 #              vad: { enabled: true, threshold: 0.05 })
 #   # result is nil on audio conversion failure
 #   # result[:chunks] is empty when no speech cues are found
@@ -145,75 +157,27 @@ module TranscriptionUtils
     [temp_wav, temp_wav]
   end
 
-  # Scans events.xml and returns per-speech cues for the given audio file,
-  # derived from ParticipantTalkingEvents bracketed by AudioTrackPublished/Unpublished.
-  def self.extract_talking_cues(events_doc, audio_file)
-    audio_basename  = File.basename(audio_file)
-    cues            = []
-    inside_track    = false
-    audio_start_utc = nil
-    user_id         = nil
-    cue_start_utc   = nil
-
-    events_doc.xpath('//event').each do |ev|
-      case ev['eventname']
-      when 'AudioTrackPublishedEvent'
-        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
-        inside_track    = true
-        audio_start_utc = ev.at_xpath('timestampUTC')&.text.to_i
-        user_id         = ev.at_xpath('userId')&.text
-
-      when 'AudioTrackUnpublishedEvent'
-        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
-        if cue_start_utc
-          cues << { 'from' => cue_start_utc - audio_start_utc,
-                    'to'   => ev.at_xpath('timestampUTC')&.text.to_i - audio_start_utc }
-          cue_start_utc = nil
-        end
-        inside_track = false
-
-      when 'ParticipantTalkingEvent'
-        next unless inside_track && ev.at_xpath('participant')&.text == user_id
-        ts      = ev.at_xpath('timestampUTC')&.text.to_i
-        talking = ev.at_xpath('talking')&.text == 'true'
-        if talking
-          cue_start_utc ||= ts
-        elsif cue_start_utc
-          cues << { 'from' => cue_start_utc - audio_start_utc, 'to' => ts - audio_start_utc }
-          cue_start_utc = nil
-        end
-      end
-    end
-
-    cues
+  # Scans events.xml and returns per-speech cues for the given audio file.
+  #
+  # livekit: true  — SFU path: cues from AudioTrackPublishedEvent + ParticipantTalkingEvent
+  #                  filtered by the track's user_id. Offsets relative to the track's
+  #                  timestampUTC (nanoseconds preserved as-is for ffmpeg-safe arithmetic).
+  # livekit: false — FreeSWITCH path: all ParticipantTalkingEvent entries within the
+  #                  StartRecordingEvent/StopRecordingEvent window. Offsets in ms relative
+  #                  to the recording start (uses the event timestamp attribute, not timestampUTC).
+  def self.extract_talking_cues(events_doc, audio_file, livekit: true)
+    livekit ? extract_talking_cues_livekit(events_doc, audio_file)
+            : extract_talking_cues_freeswitch(events_doc, audio_file)
   end
 
-  # Returns one cue per AudioTrackPublished→Unpublished interval for the given
-  # audio file. Used as a fallback when no ParticipantTalkingEvents are present.
-  def self.extract_floor_cues(events_doc, audio_file)
-    audio_basename  = File.basename(audio_file)
-    cues            = []
-    audio_start_utc = nil
-    floor_start_utc = nil
-
-    events_doc.xpath('//event').each do |ev|
-      case ev['eventname']
-      when 'AudioTrackPublishedEvent'
-        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
-        audio_start_utc = ev.at_xpath('timestampUTC')&.text.to_i
-        floor_start_utc = audio_start_utc
-
-      when 'AudioTrackUnpublishedEvent'
-        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
-        if floor_start_utc && audio_start_utc
-          cues << { 'from' => floor_start_utc - audio_start_utc,
-                    'to'   => ev.at_xpath('timestampUTC')&.text.to_i - audio_start_utc }
-          floor_start_utc = nil
-        end
-      end
-    end
-
-    cues
+  # Returns one cue covering the full recording interval for the given audio file.
+  # Used as a fallback when no ParticipantTalkingEvents are present.
+  #
+  # livekit: true  — interval derived from AudioTrackPublished/Unpublished events.
+  # livekit: false — interval derived from StartRecordingEvent/StopRecordingEvent.
+  def self.extract_floor_cues(events_doc, audio_file, livekit: true)
+    livekit ? extract_floor_cues_livekit(events_doc, audio_file)
+            : extract_floor_cues_freeswitch(events_doc, audio_file)
   end
 
   # Merges cues whose inter-cue gap is smaller than gap_ms into a single cue.
@@ -251,6 +215,10 @@ module TranscriptionUtils
   # Prepares all audio chunks for a given audio file and events.xml.
   #
   # Options:
+  #   livekit:      (Bool or nil) — audio backend selection:
+  #                                   true  = SFU/LiveKit (per-participant OGG files)
+  #                                   false = FreeSWITCH (single mixed file)
+  #                                   nil   = auto-detect from events.xml (default)
   #   merge_gap_ms: (Int)  — merge talking cues closer than this; default MERGE_GAP_MS
   #   vad:          (Hash) — VAD options applied to each chunk before it is returned:
   #                            enabled:         (Bool)  default false
@@ -269,7 +237,7 @@ module TranscriptionUtils
   #
   # Returns nil if audio conversion fails.
   # Returns a result with chunks: [] if no speech cues are found (silent audio).
-  def self.prepare_audio_chunks(audio_file, events_xml, merge_gap_ms: MERGE_GAP_MS, vad: {})
+  def self.prepare_audio_chunks(audio_file, events_xml, livekit: nil, merge_gap_ms: MERGE_GAP_MS, vad: {})
     work_file, temp_wav = convert_to_wav(audio_file)
     return nil if work_file.nil?
 
@@ -279,12 +247,26 @@ module TranscriptionUtils
     vad_max_duration_ms = vad.fetch(:max_duration_ms, VAD_MAX_DURATION_MS).to_i
 
     events_doc = Nokogiri::XML(File.read(events_xml))
-    raw_cues   = extract_talking_cues(events_doc, audio_file)
-    cues       = merge_nearby_cues(raw_cues, merge_gap_ms)
-    log_info "Talking cues: #{raw_cues.size} raw → #{cues.size} after merging (gap ≤ #{merge_gap_ms}ms)"
+
+    if livekit.nil?
+      livekit = events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").any?
+      log_info "Audio backend auto-detected: #{livekit ? 'livekit' : 'freeswitch'}"
+    end
+
+    raw_cues = extract_talking_cues(events_doc, audio_file, livekit: livekit)
+
+    if livekit
+      cues = merge_nearby_cues(raw_cues, merge_gap_ms)
+      log_info "Talking cues: #{raw_cues.size} raw → #{cues.size} after merging (gap ≤ #{merge_gap_ms}ms)"
+    else
+      cues = separate_speakers(raw_cues)
+               .flat_map { |group| merge_nearby_cues(group, merge_gap_ms) }
+               .sort_by { |c| c['from'] }
+      log_info "Talking cues: #{raw_cues.size} raw → #{cues.size} after per-speaker merging (gap ≤ #{merge_gap_ms}ms)"
+    end
 
     if cues.empty?
-      floor_cues = extract_floor_cues(events_doc, audio_file)
+      floor_cues = extract_floor_cues(events_doc, audio_file, livekit: livekit)
       if floor_cues.any?
         log_info "No talking cues — falling back to #{floor_cues.size} floor event interval(s)"
         cues = merge_nearby_cues(floor_cues, merge_gap_ms)
@@ -317,7 +299,10 @@ module TranscriptionUtils
         next
       end
 
-      chunks << { path: path, from_ms: from_ms, to_ms: to_ms }
+      chunk = { path: path, from_ms: from_ms, to_ms: to_ms }
+      chunk[:speaker_id] = cue['speaker_id'] if cue['speaker_id']
+      chunk[:speaker]    = cue['speaker']    if cue['speaker']
+      chunks << chunk
     end
 
     { work_file: work_file, temp_wav: temp_wav, chunks_dir: chunks_dir, chunks: chunks }
@@ -370,8 +355,208 @@ module TranscriptionUtils
   end
 
   # ---------------------------------------------------------------------------
-  # Private
+  # Private implementation methods
   # ---------------------------------------------------------------------------
+
+  # SFU/LiveKit: cues from AudioTrackPublishedEvent + ParticipantTalkingEvent for
+  # the specific user who owns the audio track. Timestamps from timestampUTC child
+  # element (nanosecond or millisecond precision depending on BBB version — offsets
+  # are computed as differences so the unit cancels out).
+  def self.extract_talking_cues_livekit(events_doc, audio_file)
+    audio_basename  = File.basename(audio_file)
+    cues            = []
+    inside_track    = false
+    audio_start_utc = nil
+    user_id         = nil
+    cue_start_utc   = nil
+
+    events_doc.xpath('//event').each do |ev|
+      case ev['eventname']
+      when 'AudioTrackPublishedEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        inside_track    = true
+        audio_start_utc = ev.at_xpath('timestampUTC')&.text.to_i
+        user_id         = ev.at_xpath('userId')&.text
+
+      when 'AudioTrackUnpublishedEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        if cue_start_utc
+          cues << { 'from' => cue_start_utc - audio_start_utc,
+                    'to'   => ev.at_xpath('timestampUTC')&.text.to_i - audio_start_utc,
+                    'speaker_id' => user_id }
+          cue_start_utc = nil
+        end
+        inside_track = false
+
+      when 'ParticipantTalkingEvent'
+        next unless inside_track && ev.at_xpath('participant')&.text == user_id
+        ts      = ev.at_xpath('timestampUTC')&.text.to_i
+        talking = ev.at_xpath('talking')&.text == 'true'
+        if talking
+          cue_start_utc ||= ts
+        elsif cue_start_utc
+          cues << { 'from' => cue_start_utc - audio_start_utc, 'to' => ts - audio_start_utc,
+                    'speaker_id' => user_id }
+          cue_start_utc = nil
+        end
+      end
+    end
+
+    cues
+  end
+
+  # FreeSWITCH: per-user cues from ParticipantTalkingEvent within the
+  # StartRecordingEvent/StopRecordingEvent window for the given audio file.
+  # Each user is tracked independently so overlapping speakers produce separate cues.
+  # Cues carry 'speaker_id' and 'speaker' (display name) when available.
+  # Uses the event timestamp attribute (relative ms) for offsets.
+  #
+  # Floor filter: cues are dropped when the speaker has no AudioFloorChangedEvent
+  def self.extract_talking_cues_freeswitch(events_doc, audio_file)
+    audio_basename     = File.basename(audio_file)
+    recording_start_ts = nil
+    recording_end_ts   = nil
+
+    events_doc.xpath('//event').each do |ev|
+      case ev['eventname']
+      when 'StartRecordingEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        recording_start_ts = ev['timestamp'].to_i
+      when 'StopRecordingEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        recording_end_ts = ev['timestamp'].to_i
+      end
+    end
+
+    return [] unless recording_start_ts
+
+    # Build floor intervals [gained_ms, lost_ms] per participant (relative to recording start).
+    # AudioFloorChangedEvent floor:true opens an interval; floor:false closes it.
+    floor_intervals = Hash.new { |h, k| h[k] = [] }
+    open_floors     = {}
+
+    events_doc.xpath("//event[@eventname='AudioFloorChangedEvent']").each do |ev|
+      participant = ev.at_xpath('participant')&.text
+      next unless participant
+      ts    = ev['timestamp'].to_i - recording_start_ts
+      floor = ev.at_xpath('floor')&.text == 'true'
+      if floor
+        open_floors[participant] = ts
+      elsif (gained_ts = open_floors.delete(participant))
+        floor_intervals[participant] << [gained_ts, ts]
+      end
+    end
+    recording_duration = recording_end_ts ? recording_end_ts - recording_start_ts : nil
+    open_floors.each do |participant, gained_ts|
+      floor_intervals[participant] << [gained_ts, recording_duration || Float::INFINITY]
+    end
+
+    # Track each user's open cue independently so simultaneous speakers don't interfere.
+    open_cues = {}  # user_id => cue_start_ts
+    cues      = []
+
+    events_doc.xpath('//event').each do |ev|
+      next unless ev['eventname'] == 'ParticipantTalkingEvent'
+
+      ts = ev['timestamp'].to_i
+      next if ts < recording_start_ts
+      next if recording_end_ts && ts > recording_end_ts
+
+      user_id = ev.at_xpath('participant')&.text
+      talking = ev.at_xpath('talking')&.text == 'true'
+
+      if talking
+        open_cues[user_id] ||= ts
+      elsif (cue_start_ts = open_cues.delete(user_id))
+        cue = { 'from' => cue_start_ts - recording_start_ts,
+                'to'   => ts - recording_start_ts }
+        cue['speaker_id'] = user_id if user_id
+        cues << cue
+      end
+    end
+
+    # Close any cues still open at the recording boundary.
+    boundary_ts = recording_end_ts || (open_cues.values.min || recording_start_ts)
+    open_cues.each do |user_id, cue_start_ts|
+      cue = { 'from' => cue_start_ts - recording_start_ts,
+              'to'   => boundary_ts - recording_start_ts }
+      cue['speaker_id'] = user_id if user_id
+      cues << cue
+    end
+
+    if floor_intervals.any?
+      before = cues.size
+      cues.select! do |cue|
+        (floor_intervals[cue['speaker_id']] || []).any? do |gained, lost|
+          gained <= cue['to'] && lost >= cue['from']
+        end
+      end
+      dropped = before - cues.size
+      log_info "Floor filter: dropped #{dropped} cue(s) with no floor overlap" if dropped > 0
+    end
+
+    cues.sort_by { |c| c['from'] }
+  end
+
+  # LiveKit floor fallback: one interval per AudioTrackPublished/Unpublished pair.
+  def self.extract_floor_cues_livekit(events_doc, audio_file)
+    audio_basename  = File.basename(audio_file)
+    cues            = []
+    audio_start_utc = nil
+    floor_start_utc = nil
+
+    events_doc.xpath('//event').each do |ev|
+      case ev['eventname']
+      when 'AudioTrackPublishedEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        audio_start_utc = ev.at_xpath('timestampUTC')&.text.to_i
+        floor_start_utc = audio_start_utc
+
+      when 'AudioTrackUnpublishedEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        if floor_start_utc && audio_start_utc
+          cues << { 'from' => floor_start_utc - audio_start_utc,
+                    'to'   => ev.at_xpath('timestampUTC')&.text.to_i - audio_start_utc }
+          floor_start_utc = nil
+        end
+      end
+    end
+
+    cues
+  end
+
+  # FreeSWITCH floor fallback: single interval covering the full recording window.
+  # Duration is derived from StopRecordingEvent; falls back to ffprobe if absent.
+  def self.extract_floor_cues_freeswitch(events_doc, audio_file)
+    audio_basename = File.basename(audio_file)
+    start_ts       = nil
+    stop_ts        = nil
+
+    events_doc.xpath('//event').each do |ev|
+      case ev['eventname']
+      when 'StartRecordingEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        start_ts = ev['timestamp'].to_i
+      when 'StopRecordingEvent'
+        next unless File.basename(ev.at_xpath('filename')&.text.to_s) == audio_basename
+        stop_ts = ev['timestamp'].to_i
+      end
+    end
+
+    return [] unless start_ts
+
+    duration_ms = stop_ts ? (stop_ts - start_ts) : audio_duration_ms(audio_file)
+    return [] unless duration_ms && duration_ms > 0
+
+    [{ 'from' => 0, 'to' => duration_ms }]
+  end
+
+  # Groups a flat array of cues by speaker_id so each group can be merged independently.
+  def self.separate_speakers(cues)
+    groups = {}
+    cues.each { |cue| (groups[cue['speaker_id'] || :unknown] ||= []) << cue }
+    groups.values
+  end
 
   def self.log_info(msg)
     if defined?($logger) && $logger
@@ -381,5 +566,8 @@ module TranscriptionUtils
       $stderr.puts "INFO : #{msg}"
     end
   end
-  private_class_method :log_info
+
+  private_class_method :log_info, :separate_speakers,
+                       :extract_talking_cues_livekit, :extract_talking_cues_freeswitch,
+                       :extract_floor_cues_livekit, :extract_floor_cues_freeswitch
 end
