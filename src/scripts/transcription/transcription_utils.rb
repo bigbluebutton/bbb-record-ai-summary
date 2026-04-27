@@ -425,6 +425,16 @@ module TranscriptionUtils
                     'speaker_id' => user_id }
           cue_start_utc = nil
         end
+
+      when 'ParticipantMutedEvent'
+        next unless inside_track && ev.at_xpath('participant')&.text == user_id
+        next unless ev.at_xpath('muted')&.text == 'true'
+        if cue_start_utc
+          ts = ev.at_xpath('timestampUTC')&.text.to_i
+          cues << { 'from' => cue_start_utc - audio_start_utc, 'to' => ts - audio_start_utc,
+                    'speaker_id' => user_id }
+          cue_start_utc = nil
+        end
       end
     end
 
@@ -482,14 +492,21 @@ module TranscriptionUtils
     speaker_cues = Hash.new { |h, k| h[k] = [] } # user_id => [cues]
 
     events_doc.xpath('//event').each do |ev|
-      next unless ev['eventname'] == 'ParticipantTalkingEvent'
+      eventname = ev['eventname']
+      next unless eventname == 'ParticipantTalkingEvent' || eventname == 'ParticipantMutedEvent'
 
       ts = ev['timestamp'].to_i
       next if ts < recording_start_ts
       next if recording_end_ts && ts > recording_end_ts
 
       user_id = ev.at_xpath('participant')&.text
-      talking = ev.at_xpath('talking')&.text == 'true'
+
+      talking = if eventname == 'ParticipantTalkingEvent'
+        ev.at_xpath('talking')&.text == 'true'
+      else
+        next unless ev.at_xpath('muted')&.text == 'true'
+        false
+      end
 
       if talking
         open_cues[user_id] ||= ts
