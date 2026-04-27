@@ -562,11 +562,25 @@ module Extractors
           text = seg['text'].to_s.strip
           next if text.empty?
 
+          # FreeSWITCH: per-segment speaker_id or speaker_ids carries the userId(s).
+          if (ids = seg['speaker_ids'])&.any?
+            speaker_names = ids.filter_map { |uid| audio_tracks.dig(uid, :name) }
+            speaker_names = [track_info[:name]] if speaker_names.empty?
+            user_id = ids.join('|')
+            name    = speaker_names.join(' & ')
+          elsif (sp = seg['speaker_id'] && audio_tracks[seg['speaker_id']])
+            user_id = sp[:user_id]
+            name    = sp[:name]
+          else
+            user_id = track_info[:user_id]
+            name    = track_info[:name]
+          end
+
           segments << {
             abs_start: track_info[:timestamp_utc] + seg.dig('offsets', 'from').to_i,
             abs_end:   track_info[:timestamp_utc] + seg.dig('offsets', 'to').to_i,
-            user_id:   track_info[:user_id],
-            name:      track_info[:name],
+            user_id:   user_id,
+            name:      name,
             text:      text
           }
         end
@@ -778,6 +792,13 @@ module Extractors
         }
       end
       logger.info("Found #{audio_tracks.size} AudioTrackPublishedEvent(s)")
+
+      # Also add userId-keyed entries so that FreeSWITCH segments carrying speaker_id
+      # can be resolved by build_segments_from_tracks without a separate lookup map.
+      user_names.each do |uid, name|
+        audio_tracks[uid] ||= { user_id: uid, name: name }
+      end
+
       audio_tracks
     end
   end

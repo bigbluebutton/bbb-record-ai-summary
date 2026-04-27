@@ -49,7 +49,7 @@ MAX_BYTES = 25 * 1024 * 1024  # OpenAI hard limit per request
 # Default quality filter parameters
 DEFAULT_TEMPERATURE          = 0.0
 DEFAULT_NO_SPEECH_THRESHOLD  = 1.0   # 1.0 = disabled; lower to reject high-no-speech-prob segments
-DEFAULT_QUALITY_SCORE_THRESHOLD = 0.4
+DEFAULT_QUALITY_SCORE_THRESHOLD = 0.35
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -242,7 +242,8 @@ vad_opts = {
 # Prepare audio chunks via events.xml (VAD filtering applied inside)
 # ---------------------------------------------------------------------------
 
-result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml, vad: vad_opts)
+livekit = ENV.fetch('BBB_AUDIO_BACKEND', 'livekit') != 'freeswitch'
+result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml, livekit: livekit, vad: vad_opts)
 die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
 
 info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
@@ -312,6 +313,11 @@ http.start do |conn|
       quality_score_threshold: quality_threshold
     )
     info "  → #{result_chunk[:segments].size} segment(s) (#{result_chunk[:raw_count]} raw)"
+    if chunk_info[:speaker_ids]
+      result_chunk[:segments].each { |s| s['speaker_ids'] = chunk_info[:speaker_ids] }
+    elsif chunk_info[:speaker_id]
+      result_chunk[:segments].each { |s| s['speaker_id'] = chunk_info[:speaker_id] }
+    end
     segments.concat(result_chunk[:segments])
     accepted_chunk_count += 1 if result_chunk[:segments].any?
     raw_segment_total    += result_chunk[:raw_count]
