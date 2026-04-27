@@ -49,7 +49,7 @@ MAX_BYTES = 25 * 1024 * 1024  # OpenAI hard limit per request
 # Default quality filter parameters
 DEFAULT_TEMPERATURE          = 0.0
 DEFAULT_NO_SPEECH_THRESHOLD  = 1.0   # 1.0 = disabled; lower to reject high-no-speech-prob segments
-DEFAULT_QUALITY_SCORE_THRESHOLD = 0.4
+DEFAULT_QUALITY_SCORE_THRESHOLD = 0.35
 
 # ---------------------------------------------------------------------------
 # Helpers
