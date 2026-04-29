@@ -43,9 +43,16 @@ max_parallel_audio_files: 1
 # attempt_timeout_seconds is derived automatically as the total exponential wait
 # budget: initial_wait_seconds * (2^max_attempts - 1).
 # With the defaults below that is 5 * (2^5 - 1) = 155s per attempt.
+# The effective timeout is max(attempt_timeout_seconds, audio_duration_s * transcription_timeout_factor).
 retry:
   max_attempts: 5
   initial_wait_seconds: 5
+
+# Multiplier used to derive a dynamic per-attempt timeout from the audio file duration.
+# The effective timeout is: max(floor, audio_duration_seconds * transcription_timeout_factor).
+# The floor is the value derived from the retry settings above (155s by default).
+# Increase this if large FreeSWITCH recordings are timing out.
+transcription_timeout_factor: 0.5
 
 # Voice Activity Detection — filters out chunks with little or no detected speech
 # before sending them to the API.

@@ -567,7 +567,7 @@ module Extractors
             speaker_names = ids.filter_map { |uid| audio_tracks.dig(uid, :name) }
             speaker_names = [track_info[:name]] if speaker_names.empty?
             user_id = ids.join('|')
-            name    = speaker_names.join(' & ')
+            name    = speaker_names.join(' | ')
           elsif (sp = seg['speaker_id'] && audio_tracks[seg['speaker_id']])
             user_id = sp[:user_id]
             name    = sp[:name]

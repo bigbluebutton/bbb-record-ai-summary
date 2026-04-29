@@ -515,14 +515,21 @@ module TranscriptionUtils
                 'to'   => ts - recording_start_ts }
         cue['speaker_id'] = user_id if user_id
         speaker_cues[user_id || :unknown] << cue
+      else
+        # Speaker was already talking when recording started — open cue at offset 0.
+        cue = { 'from' => 0, 'to' => ts - recording_start_ts }
+        cue['speaker_id'] = user_id if user_id
+        speaker_cues[user_id || :unknown] << cue
       end
     end
 
-    # Close any cues still open at the recording boundary.
-    boundary_ts = recording_end_ts || (open_cues.values.min || recording_start_ts)
+    # Close any cues still open at the recording boundary (speaker was still talking
+    # when recording stopped — no explicit talking=false or muted=true was received).
+    duration_ms = recording_end_ts ? recording_end_ts - recording_start_ts
+                                   : audio_duration_ms(audio_file).to_i
     open_cues.each do |user_id, cue_start_ts|
       cue = { 'from' => cue_start_ts - recording_start_ts,
-              'to'   => boundary_ts - recording_start_ts }
+              'to'   => duration_ms }
       cue['speaker_id'] = user_id if user_id
       speaker_cues[user_id || :unknown] << cue
     end
