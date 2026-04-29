@@ -204,11 +204,24 @@ class Semaphore
   end
 end
 
+def audio_duration_seconds(path)
+  out = `ffprobe -v error -show_entries format=duration -of csv=p=0 "#{path}" 2>/dev/null`.strip
+  out.empty? ? nil : out.to_f
+rescue
+  nil
+end
+
 def attempt_transcription(backend, audio_file, temp_json, events_xml, logger, retry_config:)
   basename         = File.basename(audio_file)
   max_attempts     = retry_config[:max_attempts]
   wait             = retry_config[:initial_wait_seconds]
-  timeout_seconds  = retry_config[:attempt_timeout_seconds]
+
+  duration_s       = audio_duration_seconds(audio_file) || 0
+  dynamic_timeout  = (duration_s * retry_config[:transcription_timeout_factor]).ceil
+  timeout_seconds  = [retry_config[:attempt_timeout_seconds], dynamic_timeout].max
+  log(logger, :info, "  Timeout for #{basename}: #{timeout_seconds}s " \
+                     "(floor=#{retry_config[:attempt_timeout_seconds]}s, " \
+                     "dynamic=#{dynamic_timeout}s from #{duration_s.round(1)}s audio)")
 
   max_attempts.times do |attempt|
     File.delete(temp_json) if File.exist?(temp_json)
@@ -471,14 +484,16 @@ retry_cfg    = transcription_props.fetch('retry', {})
 max_attempts         = (retry_cfg['max_attempts']         || 5).to_i
 initial_wait_seconds = (retry_cfg['initial_wait_seconds'] || 5).to_i
 retry_config = {
-  max_attempts:            max_attempts,
-  initial_wait_seconds:    initial_wait_seconds,
-  attempt_timeout_seconds: initial_wait_seconds * (2**max_attempts - 1)
+  max_attempts:               max_attempts,
+  initial_wait_seconds:       initial_wait_seconds,
+  attempt_timeout_seconds:    initial_wait_seconds * (2**max_attempts - 1),
+  transcription_timeout_factor: (transcription_props['transcription_timeout_factor'] || 0.5).to_f
 }
 
 log(logger, :info, "Retry: max_attempts=#{retry_config[:max_attempts]}, " \
                    "initial_wait=#{retry_config[:initial_wait_seconds]}s, " \
-                   "timeout=#{retry_config[:attempt_timeout_seconds]}s")
+                   "timeout_floor=#{retry_config[:attempt_timeout_seconds]}s, " \
+                   "transcription_timeout_factor=#{retry_config[:transcription_timeout_factor]}")
 
 provider_semaphore = Semaphore.new(max_parallel_providers)
 audio_semaphore    = Semaphore.new(max_parallel_audio_files)
