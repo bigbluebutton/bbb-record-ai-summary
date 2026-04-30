@@ -462,13 +462,17 @@ module Extractors
         return nil
       end
 
-      # Determine recording start time and audio track → speaker mappings from events.xml
-      recording_start = nil
-      audio_tracks    = {}
+      # Determine recording start time, intervals, and audio track → speaker mappings from events.xml
+      recording_start      = nil
+      audio_tracks         = {}
+      livekit              = false
+      recording_intervals  = []
 
       if events_doc
-        recording_start = extract_recording_start_time(events_doc, logger)
-        audio_tracks    = extract_audio_track_mappings(events_doc, logger)
+        recording_start     = extract_recording_start_time(events_doc, logger)
+        audio_tracks        = extract_audio_track_mappings(events_doc, logger)
+        livekit             = events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").any?
+        recording_intervals = extract_start_stop_recording_intervals(events_doc)
       end
 
       unless recording_start
@@ -476,7 +480,8 @@ module Extractors
         return nil
       end
 
-      segments = build_segments_from_tracks(tracks_data, audio_tracks, recording_start, logger)
+      segments = build_segments_from_tracks(tracks_data, audio_tracks,
+                                            events_doc, livekit, recording_intervals, logger)
 
       if segments.empty?
         logger.warn("No transcript segments found in transcription.json")
@@ -488,7 +493,7 @@ module Extractors
                   "(#{tracks_data.size} track(s))")
 
       # Generate speaker-attributed cues, then serialize to VTT and JSON
-      transcription_cues      = create_transcription_cues(segments, recording_start, logger)
+      transcription_cues = create_transcription_cues(segments, logger)
       
       # Generate WebVTT
       diarized_vtt       = format_cues_into_vtt(transcription_cues)
@@ -512,11 +517,13 @@ module Extractors
     end
 
     def self.diarize_provider_transcriptions(raw_archive_dir, target_dir, logger, events_doc)
-      recording_start = extract_recording_start_time(events_doc, logger)
+      recording_start     = extract_recording_start_time(events_doc, logger)
       return [] unless recording_start
 
-      audio_tracks   = extract_audio_track_mappings(events_doc, logger)
-      provider_files = Dir.glob("#{raw_archive_dir}/transcription/transcription_*.json").sort
+      audio_tracks        = extract_audio_track_mappings(events_doc, logger)
+      livekit             = events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").any?
+      recording_intervals = extract_start_stop_recording_intervals(events_doc)
+      provider_files      = Dir.glob("#{raw_archive_dir}/transcription/transcription_*.json").sort
       return [] if provider_files.empty?
 
       provider_files.filter_map do |src|
@@ -528,14 +535,15 @@ module Extractors
           next
         end
 
-        segments = build_segments_from_tracks(json_data['tracks'] || [], audio_tracks, recording_start, logger)
+        segments = build_segments_from_tracks(json_data['tracks'] || [], audio_tracks,
+                                              events_doc, livekit, recording_intervals, logger)
         if segments.empty?
           logger.warn("No segments in #{File.basename(src)}, skipping diarization")
           next
         end
 
         segments.sort_by! { |s| s[:abs_start] }
-        cues          = create_transcription_cues(segments, recording_start, logger)
+        cues          = create_transcription_cues(segments, logger)
         diarized_json = format_cues_into_json(cues)
         out_file      = "#{target_dir}/transcript_diarized_#{provider_name}.json"
         File.write(out_file, JSON.pretty_generate(diarized_json))
@@ -546,17 +554,21 @@ module Extractors
 
     private
 
-    def self.build_segments_from_tracks(tracks_data, audio_tracks, recording_start, logger)
+    def self.build_segments_from_tracks(tracks_data, audio_tracks, events_doc, livekit, recording_intervals, logger)
       segments = []
       tracks_data.each do |track|
-        file_basename = track['file']
-        track_info    = audio_tracks[file_basename]
+        file_basename  = track['file']
+        track_info     = audio_tracks[file_basename]
 
         unless track_info
           logger.warn("No speaker mapping for audio track '#{file_basename}', " \
                       "attributing to 'Unknown Speaker'")
-          track_info = { user_id: file_basename, name: 'Unknown Speaker', timestamp_utc: recording_start }
+          track_info = { user_id: file_basename, name: 'Unknown Speaker' }
         end
+
+        section_offset = calculate_section_offset(events_doc, file_basename,
+                                                  livekit: livekit,
+                                                  recording_intervals: recording_intervals)
 
         (track['segments'] || []).each do |seg|
           text = seg['text'].to_s.strip
@@ -577,8 +589,8 @@ module Extractors
           end
 
           segments << {
-            abs_start: track_info[:timestamp_utc] + seg.dig('offsets', 'from').to_i,
-            abs_end:   track_info[:timestamp_utc] + seg.dig('offsets', 'to').to_i,
+            abs_start: section_offset + seg.dig('offsets', 'from').to_i,
+            abs_end:   section_offset + seg.dig('offsets', 'to').to_i,
             user_id:   user_id,
             name:      name,
             text:      text
@@ -599,9 +611,9 @@ module Extractors
       format('%02d:%02d:%02d.%03d', hours, minutes, seconds, millis)
     end
 
-    # Build speaker-attributed cues from sorted segment list
+    # Build speaker-attributed cues from sorted segment list.
     # Returns: [{start_ms:, end_ms:, speaker:, text:}]
-    def self.create_transcription_cues(segments, recording_start, logger)
+    def self.create_transcription_cues(segments, logger)
       return [] if segments.empty?
 
       cues = []
@@ -621,7 +633,7 @@ module Extractors
 
         if (speaker_changed || cue_too_long) && !current_texts.empty?
           collect_cues(cues, current_speaker_name, current_texts.join(' '),
-                       cue_start, cue_end, recording_start)
+                       cue_start, cue_end)
           current_texts = []
           cue_start     = nil
         end
@@ -638,7 +650,7 @@ module Extractors
 
       unless current_texts.empty?
         collect_cues(cues, current_speaker_name, current_texts.join(' '),
-                     cue_start, cue_end, recording_start)
+                     cue_start, cue_end)
       end
 
       cues.sort_by! { |c| c[:start_ms] }
@@ -664,14 +676,15 @@ module Extractors
       lines.join("\n")
     end
 
-    # Collect one or more VTT cues into the array, splitting long text at sentence boundaries
-    def self.collect_cues(cues, speaker_name, full_text, abs_start, abs_end, recording_start)
+    # Collect one or more VTT cues into the array, splitting long text at sentence boundaries.
+    # abs_start/abs_end are already effective recording ms (pause time excluded).
+    def self.collect_cues(cues, speaker_name, full_text, abs_start, abs_end)
       text = full_text.strip
       return if text.empty?
 
       if text.length <= MAX_CUE_CHARS
-        cues << { start_ms: abs_start - recording_start,
-                  end_ms:   abs_end   - recording_start,
+        cues << { start_ms: abs_start,
+                  end_ms:   abs_end,
                   speaker:  speaker_name,
                   text:     text }
         return
@@ -699,8 +712,8 @@ module Extractors
         cue_abs_start = abs_start + (total_duration * char_ratio_start).to_i
         cue_abs_end   = abs_start + (total_duration * char_ratio_end).to_i
 
-        cues << { start_ms: cue_abs_start - recording_start,
-                  end_ms:   cue_abs_end   - recording_start,
+        cues << { start_ms: cue_abs_start,
+                  end_ms:   cue_abs_end,
                   speaker:  speaker_name,
                   text:     group_text.strip }
 
@@ -766,7 +779,7 @@ module Extractors
       nil
     end
 
-    # Build hash: audio_file_basename => { user_id:, name:, timestamp_utc: }
+    # Build hash: audio_file_basename => { user_id:, name: }
     def self.extract_audio_track_mappings(events_doc, logger)
       user_names = {}
       events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |event|
@@ -778,17 +791,15 @@ module Extractors
 
       audio_tracks = {}
       events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").each do |event|
-        user_id       = event.xpath('userId').text.strip
-        filename      = event.xpath('filename').text.strip
-        timestamp_utc = event.xpath('timestampUTC').text.to_i
+        user_id  = event.xpath('userId').text.strip
+        filename = event.xpath('filename').text.strip
 
         next if user_id.empty? || filename.empty?
 
         basename = File.basename(filename)
         audio_tracks[basename] = {
-          user_id:       user_id,
-          name:          user_names[user_id] || "Unknown (#{user_id})",
-          timestamp_utc: timestamp_utc
+          user_id: user_id,
+          name:    user_names[user_id] || "Unknown (#{user_id})"
         }
       end
       logger.info("Found #{audio_tracks.size} AudioTrackPublishedEvent(s)")
@@ -800,6 +811,60 @@ module Extractors
       end
 
       audio_tracks
+    end
+
+    # Returns an ordered array of [start_ts, stop_ts] pairs covering each recording-on interval.
+    def self.extract_start_stop_recording_intervals(events_doc)
+      intervals     = []
+      current_start = nil
+
+      events_doc.xpath("//event[@eventname='RecordStatusEvent']").each do |ev|
+        status = ev.at_xpath('status')&.text&.strip
+        ts     = ev['timestamp'].to_i
+        next unless ts > 0
+
+        if status == 'true'
+          current_start ||= ts
+        elsif status == 'false' && current_start
+          intervals << [current_start, ts]
+          current_start = nil
+        end
+      end
+      intervals << [current_start, nil] if current_start
+
+      intervals
+    end
+
+    # Returns the effective playback position (ms, pause-excluded) at which
+    # the given audio file starts. Adding this to the transcription segment's
+    def self.calculate_section_offset(events_doc, filename, livekit:, recording_intervals:)
+      return 0 if recording_intervals.empty?
+
+      audio_basename = File.basename(filename.to_s)
+
+      event_name = livekit ? 'AudioTrackPublishedEvent' : 'StartRecordingEvent'
+      ev = events_doc.xpath("//event[@eventname='#{event_name}']").find do |e|
+        File.basename(e.at_xpath('filename')&.text.to_s) == audio_basename
+      end
+      section_start = ev&.[]('timestamp')&.to_i
+
+      return 0 unless section_start && section_start > 0
+
+      first_start = recording_intervals.first[0]
+
+      # Section started before recording began (e.g. participant joined early).
+      # Return a negative offset so whisper timestamps shift left to align
+      # with playback position 0.
+      return section_start - first_start if section_start < first_start
+
+      # Sum recording time that elapsed before this section started.
+      offset = 0
+      recording_intervals.each do |start_ts, stop_ts|
+        break if start_ts >= section_start
+        effective_end = stop_ts ? [stop_ts, section_start].min : section_start
+        offset += effective_end - start_ts
+      end
+      offset
     end
   end
 
