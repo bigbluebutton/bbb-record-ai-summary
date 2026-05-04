@@ -426,6 +426,30 @@ module Extractors
     end
   end
 
+  class EventsExtractor
+    # Returns an ordered array of [start_ts, stop_ts] pairs covering each recording-on interval.
+    def self.extract_start_stop_recording_intervals(events_doc)
+      intervals     = []
+      current_start = nil
+
+      events_doc.xpath("//event[@eventname='RecordStatusEvent']").each do |ev|
+        status = ev.at_xpath('status')&.text&.strip
+        ts     = ev['timestamp'].to_i
+        next unless ts > 0
+
+        if status == 'true'
+          current_start ||= ts
+        elsif status == 'false' && current_start
+          intervals << [current_start, ts]
+          current_start = nil
+        end
+      end
+      intervals << [current_start, nil] if current_start
+
+      intervals
+    end
+  end
+
   # Reads pre-computed transcription from post_archive/transcribe_audio.rb output
   # Expected input: raw_archive_dir/transcription/transcription.json
   class TranscriptExtractor
@@ -472,7 +496,7 @@ module Extractors
         recording_start     = extract_recording_start_time(events_doc, logger)
         audio_tracks        = extract_audio_track_mappings(events_doc, logger)
         livekit             = events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").any?
-        recording_intervals = extract_start_stop_recording_intervals(events_doc)
+        recording_intervals = EventsExtractor.extract_start_stop_recording_intervals(events_doc)
       end
 
       unless recording_start
@@ -522,7 +546,7 @@ module Extractors
 
       audio_tracks        = extract_audio_track_mappings(events_doc, logger)
       livekit             = events_doc.xpath("//event[@eventname='AudioTrackPublishedEvent']").any?
-      recording_intervals = extract_start_stop_recording_intervals(events_doc)
+      recording_intervals = EventsExtractor.extract_start_stop_recording_intervals(events_doc)
       provider_files      = Dir.glob("#{raw_archive_dir}/transcription/transcription_*.json").sort
       return [] if provider_files.empty?
 
@@ -813,28 +837,6 @@ module Extractors
       audio_tracks
     end
 
-    # Returns an ordered array of [start_ts, stop_ts] pairs covering each recording-on interval.
-    def self.extract_start_stop_recording_intervals(events_doc)
-      intervals     = []
-      current_start = nil
-
-      events_doc.xpath("//event[@eventname='RecordStatusEvent']").each do |ev|
-        status = ev.at_xpath('status')&.text&.strip
-        ts     = ev['timestamp'].to_i
-        next unless ts > 0
-
-        if status == 'true'
-          current_start ||= ts
-        elsif status == 'false' && current_start
-          intervals << [current_start, ts]
-          current_start = nil
-        end
-      end
-      intervals << [current_start, nil] if current_start
-
-      intervals
-    end
-
     # Returns the effective playback position (ms, pause-excluded) at which
     # the given audio file starts. Adding this to the transcription segment's
     def self.calculate_section_offset(events_doc, filename, livekit:, recording_intervals:)
@@ -1036,7 +1038,7 @@ module Extractors
     # Event names used across different BBB versions for public chat messages
     CHAT_EVENT_NAMES = %w[GroupChatMessageBroadcastEvent PublicChatEvent].freeze
 
-    def self.extract(events_doc, recording_start_ms, logger)
+    def self.extract(events_doc, recording_start_ms, logger, recording_intervals: [])
       # Build userId → display name map
       user_names = {}
       events_doc.xpath("//event[@eventname='ParticipantJoinEvent']").each do |event|
@@ -1058,8 +1060,17 @@ module Extractors
           plain_message = strip_html(raw_message).strip
           next if plain_message.empty?
 
+          # Compute pause-adjusted playback position.
+          # Fallback: simple UTC offset when no recording intervals are available.
+          playback_ms = if recording_intervals.empty?
+            timestamp_utc - recording_start_ms
+          else
+            get_playback_offset_ms(event['timestamp'].to_i, recording_intervals)
+          end
+          next if playback_ms.nil?
+
           messages << {
-            timestamp_ms: timestamp_utc - recording_start_ms,
+            timestamp_ms: playback_ms,
             sender:       user_names[sender_id] || sender_id,
             message:      plain_message
           }
@@ -1080,6 +1091,22 @@ module Extractors
       # Nokogiri decodes XML entities when reading .text, so raw_message may
       # contain literal HTML tags (e.g. "<p>hello</p>"). Strip them to plain text.
       html.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ').strip
+    end
+
+    # Returns the pause-adjusted playback position (ms) for a BBB server timestamp,
+    # or nil if the timestamp falls outside all recording intervals (pre-recording or paused).
+    def self.get_playback_offset_ms(msg_ts, intervals)
+      elapsed = 0
+      intervals.each do |start_ts, stop_ts|
+        return nil if msg_ts < start_ts
+
+        if stop_ts.nil? || msg_ts <= stop_ts
+          return elapsed + (msg_ts - start_ts)
+        end
+
+        elapsed += stop_ts - start_ts
+      end
+      nil
     end
   end
 end
@@ -1292,9 +1319,11 @@ unless FileTest.directory?(target_dir)
       events_doc, BigBlueButton.logger
     )
 
-    # Extract public chat messages
+    # Extract public chat messages, filtered to active recording intervals
+    recording_intervals = Extractors::EventsExtractor.extract_start_stop_recording_intervals(events_doc)
     chat_messages = if recording_start_ms
-      Extractors::ChatExtractor.extract(events_doc, recording_start_ms, BigBlueButton.logger)
+      Extractors::ChatExtractor.extract(events_doc, recording_start_ms, BigBlueButton.logger,
+                                        recording_intervals: recording_intervals)
     else
       BigBlueButton.logger.warn("Skipping chat extraction: could not determine recording_start_ms")
       []
