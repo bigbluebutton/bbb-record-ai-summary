@@ -35,8 +35,10 @@
     .kpi .value { font-weight: 700; font-size: 20px; }
     nav.toc { margin: 22px 0 10px; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     nav.toc a { text-decoration: none; color: var(--accent); background: var(--panel); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px; }
-    section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin-top: 18px; box-shadow: var(--shadow); }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin-top: 18px; box-shadow: var(--shadow); overflow-wrap: break-word; word-break: break-word; overflow: hidden; }
     section h2 { margin-top: 0; font-size: 20px; }
+    section img, section iframe, section video { max-width: 100%; height: auto; }
+    section a { word-break: break-all; color: var(--accent); }
     .muted { color: var(--muted); }
     .attendees { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:10px; list-style:none; padding:0; margin:0; }
     .attendees li { background: var(--bg); border: 1px solid var(--border); padding: 10px 12px; border-radius: 10px; }
