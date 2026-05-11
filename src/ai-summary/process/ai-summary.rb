@@ -537,7 +537,7 @@ module Extractors
       File.write(transcript_file, plain_text)
       logger.info("Saved plain transcript: #{transcript_file}")
 
-      { plain: plain_text, diarized: diarized_vtt, language: json_data['language'], recording_start: recording_start }
+      { plain: plain_text, diarized: diarized_vtt, language: json_data['language'], recording_start: recording_start, provider: provider }
     end
 
     def self.diarize_provider_transcriptions(raw_archive_dir, target_dir, logger, events_doc)
@@ -1140,6 +1140,29 @@ def vtt_timestamp_to_ms(ts)
   (hours * 3_600_000) + (minutes * 60_000) + (seconds * 1_000) + millis
 end
 
+# Merge consecutive cues from the same speaker when the gap between them is below gap_ms.
+# Used for display only — the underlying WebVTT file is not affected.
+def group_transcript_cues(cues, gap_ms: 5000)
+  return [] if cues.empty?
+
+  groups = []
+  current = cues.first.dup.tap { |c| c[:text] = c[:text].dup }
+
+  cues[1..].each do |cue|
+    gap = vtt_timestamp_to_ms(cue[:start]) - vtt_timestamp_to_ms(current[:end])
+    if cue[:speaker] == current[:speaker] && gap < gap_ms
+      current[:end]  = cue[:end]
+      current[:text] = "#{current[:text]} #{cue[:text]}"
+    else
+      groups << current
+      current = cue.dup.tap { |c| c[:text] = c[:text].dup }
+    end
+  end
+
+  groups << current
+  groups
+end
+
 # Helper method to render markdown using ERB template
 def render_markdown_into_template(template_path, data)
   template_content = File.read(template_path, encoding: 'utf-8')
@@ -1254,7 +1277,8 @@ else
   format_props = load_format_config("#{project_root}/src/ai-summary.yml")
 end
 
-include_chat_in_discussion = format_props.fetch('include_chat_in_discussion', true)
+include_chat_in_discussion      = format_props.fetch('include_chat_in_discussion', true)
+transcript_group_gap_ms         = (format_props.fetch('transcript_group_gap_seconds', 5).to_f * 1000).to_i
 
 # Set up paths
 recording_dir = props['recording_dir']
@@ -1310,8 +1334,10 @@ unless FileTest.directory?(target_dir)
     transcript_plain    = transcript.is_a?(Hash) ? transcript[:plain]    : transcript
     transcript_diarized = transcript.is_a?(Hash) ? transcript[:diarized] : nil
     transcript_language = transcript.is_a?(Hash) ? transcript[:language] : nil
+    transcript_provider = transcript.is_a?(Hash) ? transcript[:provider] : nil
 
-    transcript_cues = WebVTTParser.parse(transcript_diarized)
+    transcript_cues         = WebVTTParser.parse(transcript_diarized)
+    grouped_transcript_cues = group_transcript_cues(transcript_cues, gap_ms: transcript_group_gap_ms)
 
     # Determine recording start time for chat relative timestamps
     recording_start_ms = transcript.is_a?(Hash) ? transcript[:recording_start] : nil
@@ -1341,39 +1367,41 @@ unless FileTest.directory?(target_dir)
     )
 
     # Build merged discussion timeline (transcript cues + chat messages) sorted by time
-    discussion_timeline = []
-    if include_chat_in_discussion
-      transcript_cues.each do |cue|
-        discussion_timeline << {
-          type:         :transcript,
-          timestamp_ms: vtt_timestamp_to_ms(cue[:start]),
-          display_time: cue[:start],
-          start:        cue[:start],
-          end:          cue[:end],
-          speaker:      cue[:speaker],
-          text:         cue[:text]
-        }
-      end
+    discussion_timeline           = []
+    discussion_timeline_segmented = nil
+    transcript_segmented          = transcript_provider == 'openai_whisper' ? transcript_cues : nil
 
+    cues_to_timeline = lambda do |cues|
+      items = cues.map do |cue|
+        { type: :transcript, timestamp_ms: vtt_timestamp_to_ms(cue[:start]),
+          display_time: cue[:start], start: cue[:start], end: cue[:end],
+          speaker: cue[:speaker], text: cue[:text] }
+      end
       chat_messages.each do |msg|
         ms = [msg[:timestamp_ms], 0].max
         total_s = ms / 1000
         h = total_s / 3600; m = (total_s % 3600) / 60; s = total_s % 60
-        display = format('%02d:%02d:%02d.%03d', h, m, s, ms % 1000)
-        discussion_timeline << {
-          type:         :chat,
-          timestamp_ms: msg[:timestamp_ms],
-          display_time: display,
-          sender:       msg[:sender],
-          message:      msg[:message]
-        }
+        items << { type: :chat, timestamp_ms: msg[:timestamp_ms],
+                   display_time: format('%02d:%02d:%02d.%03d', h, m, s, ms % 1000),
+                   sender: msg[:sender], message: msg[:message] }
       end
+      items.sort_by! { |item| item[:timestamp_ms] }
+    end
 
-      discussion_timeline.sort_by! { |item| item[:timestamp_ms] }
+    if include_chat_in_discussion
+      discussion_timeline = cues_to_timeline.call(grouped_transcript_cues)
       BigBlueButton.logger.info(
         "Built discussion timeline: #{discussion_timeline.size} items " \
-        "(#{transcript_cues.size} transcript cues + #{chat_messages.size} chat messages)"
+        "(#{grouped_transcript_cues.size} grouped transcript cues + #{chat_messages.size} chat messages)"
       )
+
+      if transcript_provider == 'openai_whisper'
+        discussion_timeline_segmented = cues_to_timeline.call(transcript_cues)
+        BigBlueButton.logger.info(
+          "Built segmented discussion timeline: #{discussion_timeline_segmented.size} items " \
+          "(#{transcript_cues.size} transcript cues)"
+        )
+      end
     end
 
     # Collect all data for markdown template
@@ -1382,7 +1410,7 @@ unless FileTest.directory?(target_dir)
       word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
-      transcript_diarized: transcript_cues,
+      transcript_diarized: grouped_transcript_cues,
       polls: polls,
       summary: summary,
       discussion_timeline: discussion_timeline
@@ -1433,7 +1461,7 @@ unless FileTest.directory?(target_dir)
       attendees: attendees,
       attendee_count: attendees.length,
       word_count: word_count,
-      transcript: transcript_cues,
+      transcript: grouped_transcript_cues,
       transcript_format: "Speaker-labeled",
       vtt_label: "WEBVTT",
       transcript_title: "Speaker-Labeled Transcript",
@@ -1445,6 +1473,8 @@ unless FileTest.directory?(target_dir)
       summary_html: summary_html,
       action_items: action_items,
       discussion_timeline: discussion_timeline,
+      discussion_timeline_segmented: discussion_timeline_segmented,
+      transcript_segmented: transcript_segmented,
       footer: "Generated by BigBlueButton: #{Time.now.strftime('%B %-d, %Y at %-I:%M %p %Z')}"
     }
 
