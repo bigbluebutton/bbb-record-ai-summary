@@ -104,7 +104,7 @@ ls /var/bigbluebutton/published/ai-summary/<meeting_id>/
 |---|---|
 | LLM override config | `/etc/bigbluebutton/ai-summary.yml` |
 | Transcription override config | `/etc/bigbluebutton/post-archive-transcription.yml` |
-| BBB recording pipeline config | `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml` |
+| BBB recording pipeline config | `/etc/bigbluebutton/recording/recording.yml` |
 | Post-archive script | `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb` |
 | Process script | `/usr/local/bigbluebutton/core/scripts/process/ai-summary.rb` |
 | Publish script | `/usr/local/bigbluebutton/core/scripts/publish/ai-summary.rb` |

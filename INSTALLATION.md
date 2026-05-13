@@ -115,7 +115,7 @@ language: en
 Edit:
 
 ```bash
-sudo vi /usr/local/bigbluebutton/core/scripts/bigbluebutton.yml
+sudo vi /etc/bigbluebutton/recording/recording.yml
 ```
 
 Use:
