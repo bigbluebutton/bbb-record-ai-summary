@@ -151,9 +151,11 @@
           <input type="checkbox" id="show-chat" <%= @include_chat ? 'checked' : '' %> onchange="renderTimeline()" /> Show chat messages
         </label>
         <% end %>
+        <% if @transcript_provider == 'openai_whisper' %>
         <label style="display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:14px;cursor:pointer;">
           <input type="checkbox" id="group-cues" checked onchange="renderTimeline()" /> Group cues
         </label>
+        <% end %>
       </div>
       <details class="transcript" open>
         <summary>Expand / Collapse</summary>

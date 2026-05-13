@@ -1457,6 +1457,7 @@ unless FileTest.directory?(target_dir)
       has_transcript: !transcript_cues.empty?,
       has_chat: !chat_messages.empty?,
       include_chat: include_chat_in_discussion,
+      transcript_provider: transcript_provider,
       transcript_cues_json: transcript_cues.map { |c|
         { start_ms: vtt_timestamp_to_ms(c[:start]), end_ms: vtt_timestamp_to_ms(c[:end]),
           speaker: c[:speaker], text: c[:text] }
