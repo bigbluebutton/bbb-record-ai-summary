@@ -148,7 +148,7 @@ The `debian/` directory uses standard debhelper. `debian/rules` installs all sou
 
 After deployment, wire `ai-summary` into the pipeline:
 ```bash
-BBB_YML=/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml
+BBB_YML=/etc/bigbluebutton/recording/recording.yml
 sudo yq e -i '.steps.captions += ["process:ai-summary"]' "$BBB_YML"
 sudo yq e -i '.steps["process:ai-summary"] = "publish:ai-summary"' "$BBB_YML"
 ```
@@ -290,7 +290,7 @@ Environment variables take priority over config file values:
 - Reads the `docs:` section from `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`
 
 ### Post-archive script (`transcribe_audio.rb`)
-- **Production**: reads from `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`
+- **Production**: reads from `/etc/bigbluebutton/recording/recording.yml`
 - **Development**: reads from `src/config/bigbluebutton.yml` (relative to `src/scripts/post_archive/`)
 
 ## Key Implementation Details

@@ -34,7 +34,7 @@ Meeting ends
     /var/bigbluebutton/published/ai-summary/<meeting_id>/
 ```
 
-The pipeline config that wires `ai-summary` in (`/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`):
+The pipeline config that wires `ai-summary` in (`/etc/bigbluebutton/recording/recording.yml`):
 
 ```yaml
 steps:
