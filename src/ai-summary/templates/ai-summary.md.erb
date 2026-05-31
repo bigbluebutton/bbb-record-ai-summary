@@ -1,15 +1,15 @@
-# Shared Notes
+# <%= @strings["heading_shared_notes"] %>
 
 <% if @notes_content && !@notes_content.empty? %>
 <%= @notes_content %>
 <% else %>
-(No notes content)
+<%= @strings["no_notes"] %>
 <% end %>
 
 ---
 
 <% if @attendees && !@attendees.empty? %>
-## Attendees (<%= @attendees.length %>)
+## <%= @strings["heading_attendees"] %> (<%= @attendees.length %>)
 
 <%= @attendees.map { |name| "- #{name}" }.join("\n") %>
 
@@ -17,13 +17,13 @@
 
 <% end %>
 <% if @polls && !@polls.empty? %>
-## Poll Results (<%= @polls.length %>)
+## <%= @strings["heading_poll_results"] %> (<%= @polls.length %>)
 
 <% @polls.each_with_index do |poll, idx| %>
-### Poll <%= idx + 1 %>: <%= poll[:question] %>
+### <%= @strings["poll_prefix"] %> <%= idx + 1 %>: <%= poll[:question] %>
 
 <% poll[:answers].each do |answer| %>
-- **<%= answer[:text] %>**: <%= answer[:votes] %> <%= answer[:votes] == 1 ? 'vote' : 'votes' %>
+- **<%= answer[:text] %>**: <%= answer[:votes] %> <%= answer[:votes] == 1 ? @strings["vote_singular"] : @strings["vote_plural"] %>
 <% end %>
 
 <% end %>
@@ -31,21 +31,21 @@
 
 <% end %>
 <% if @discussion_timeline && !@discussion_timeline.empty? %>
-## Discussion
+## <%= @strings["heading_discussion"] %>
 
 <% @discussion_timeline.each do |item| %>
 <% if item[:type] == :transcript %>
 **[<%= item[:display_time] %>] <%= item[:speaker] %>:** <%= item[:text] %>
 
 <% elsif item[:type] == :chat %>
-**[<%= item[:display_time] %>] <%= item[:sender] %> [chat]:** <%= item[:message] %>
+**[<%= item[:display_time] %>] <%= item[:sender] %> [<%= @strings["chat_tag"] %>]:** <%= item[:message] %>
 
 <% end %>
 <% end %>
 ---
 
 <% elsif @transcript_diarized && !@transcript_diarized.empty? %>
-## Audio Transcription (Speaker-Labeled)
+## <%= @strings["heading_transcription_diarized"] %>
 
 <% @transcript_diarized.each do |cue| %>
 **[<%= cue[:start] %> → <%= cue[:end] %>] <%= cue[:speaker] %>:** <%= cue[:text] %>
@@ -54,7 +54,7 @@
 ---
 
 <% elsif @transcript && !@transcript.empty? %>
-## Audio Transcription
+## <%= @strings["heading_transcription"] %>
 
 <%= @transcript %>
 
@@ -62,7 +62,7 @@
 
 <% end %>
 <% if @summary && !@summary.empty? %>
-## Meeting Summary
+## <%= @strings["heading_summary"] %>
 
 <%= @summary %>
 
@@ -70,5 +70,5 @@
 
 <% end %>
 <% if @word_count %>
-*Word Count: <%= @word_count %> words*
+*<%= @strings["word_count_label"] %> <%= @word_count %> <%= @strings["word_count_unit"] %>*
 <% end %>

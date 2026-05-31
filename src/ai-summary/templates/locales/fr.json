@@ -1,0 +1,58 @@
+{
+  "lang_code": "fr",
+
+  "page_title_fallback": "Session BigBlueButton — Résumé & Transcription",
+  "page_description": "Résumé HTML5 professionnel d'une session BigBlueButton avec participants, notes partagées, transcription et points d'action.",
+  "heading_fallback": "Session BigBlueButton — Résumé",
+  "html_subtitle_fallback": "Rapport HTML5 épuré et imprimable avec notes partagées, participants, transcription et points d'action.",
+
+  "meeting_title_fallback": "Session BigBlueButton",
+  "subtitle_fallback": "Notes de réunion, transcription et résumé généré par IA",
+  "footer_prefix": "Généré par BigBlueButton :",
+  "footer_fallback": "Généré par le processeur de notes BigBlueButton.",
+  "duration_minute": "minute",
+  "duration_minutes": "minutes",
+
+  "kpi_attendees": "Participants",
+  "kpi_transcript": "Transcription",
+  "kpi_words": "Mots",
+
+  "btn_print": "Imprimer",
+  "btn_print_title": "Imprimer ou enregistrer en PDF",
+  "btn_theme_title": "Basculer thème clair/sombre",
+  "btn_collapse_title": "Développer/réduire la transcription",
+  "btn_toggle_transcript": "Afficher/masquer la transcription",
+  "btn_light_mode": "Mode clair",
+  "btn_dark_mode": "Mode sombre",
+
+  "heading_shared_notes": "Notes partagées",
+  "heading_attendees": "Participants",
+  "heading_poll_results": "Résultats des sondages",
+  "heading_transcript": "Transcription",
+  "heading_discussion": "Discussion",
+  "heading_transcription_diarized": "Transcription audio (avec identification des intervenants)",
+  "heading_transcription": "Transcription audio",
+  "heading_summary": "Résumé de la réunion",
+  "heading_action_items": "Points d'action",
+
+  "no_attendees": "(Aucun participant enregistré)",
+  "no_notes": "(Aucun contenu de notes)",
+
+  "poll_prefix": "Sondage",
+  "vote_singular": "vote",
+  "vote_plural": "votes",
+
+  "show_chat_messages": "Afficher les messages du chat",
+  "group_cues": "Regrouper les répliques",
+  "expand_collapse": "Développer / Réduire",
+  "timestamps_note": "Horodatages relatifs au début de l'enregistrement.",
+  "action_item_owner": "Responsable :",
+  "chat_tag": "chat",
+  "transcript_format_labeled": "Avec identification des intervenants",
+
+  "word_count_label": "Nombre de mots :",
+  "word_count_unit": "mots",
+
+  "month_names": ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+  "date_format": "%-d {month} %Y à %-H:%M %Z"
+}

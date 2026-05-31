@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="<%= @strings&.fetch('lang_code', 'en') || 'en' %>" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title><%= @title || "BigBlueButton Session — Summary & Transcript" %></title>
-  <meta name="description" content="<%= @description || "Professional HTML5 summary for a BigBlueButton session with attendees, shared notes, transcript, and action items." %>" />
+  <title><%= @title || @strings["page_title_fallback"] %></title>
+  <meta name="description" content="<%= @description || @strings["page_description"] %>" />
   <style>
     :root {
       --bg: #1a1b26;
@@ -69,56 +69,56 @@
 <body>
   <div class="container">
     <header class="hero" role="banner">
-      <h1 style="margin:0 0 6px"><%= @title || "BigBlueButton Session — Summary" %></h1>
-      <p class="muted" style="margin:0"><%= @subtitle || "A clean, printable HTML5 report with shared notes, attendees, transcript, and action items." %></p>
+      <h1 style="margin:0 0 6px"><%= @title || @strings["heading_fallback"] %></h1>
+      <p class="muted" style="margin:0"><%= @subtitle || @strings["html_subtitle_fallback"] %></p>
       <div class="kpis" role="group" aria-label="Quick stats">
-        <div class="kpi"><div class="label">Attendees</div><div class="value"><%= (@attendees&.size || @attendee_count || 0) %></div></div>
-        <div class="kpi"><div class="label">Transcript</div><div class="value"><%= @transcript_format || "Speaker‑labeled" %></div></div>
-        <div class="kpi"><div class="label">Words</div><div class="value"><%= @word_count || 0 %></div></div>
+        <div class="kpi"><div class="label"><%= @strings["kpi_attendees"] %></div><div class="value"><%= (@attendees&.size || @attendee_count || 0) %></div></div>
+        <div class="kpi"><div class="label"><%= @strings["kpi_transcript"] %></div><div class="value"><%= @transcript_format || @strings["transcript_format_labeled"] %></div></div>
+        <div class="kpi"><div class="label"><%= @strings["kpi_words"] %></div><div class="value"><%= @word_count || 0 %></div></div>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button class="btn" id="printBtn" type="button" title="Print or save as PDF">
+        <button class="btn" id="printBtn" type="button" title="<%= @strings["btn_print_title"] %>">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-          Print
+          <%= @strings["btn_print"] %>
         </button>
-        <button class="btn" id="themeBtn" type="button" title="Toggle light/dark theme">
+        <button class="btn" id="themeBtn" type="button" title="<%= @strings["btn_theme_title"] %>">
           <!-- label set by JS on load -->
         </button>
-        <button class="btn" id="collapseBtn" type="button" title="Collapse/expand transcript">
+        <button class="btn" id="collapseBtn" type="button" title="<%= @strings["btn_collapse_title"] %>">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          Toggle transcript
+          <%= @strings["btn_toggle_transcript"] %>
         </button>
       </div>
     </header>
 
     <nav class="toc" aria-label="Contents">
       <% if @shared_notes && !@shared_notes.empty? %>
-      <a href="#shared-notes">Shared Notes</a>
+      <a href="#shared-notes"><%= @strings["heading_shared_notes"] %></a>
       <% end %>
-      <a href="#attendees">Attendees</a>
+      <a href="#attendees"><%= @strings["heading_attendees"] %></a>
       <% if @polls && !@polls.empty? %>
-      <a href="#polls">Poll Results</a>
+      <a href="#polls"><%= @strings["heading_poll_results"] %></a>
       <% end %>
       <% if @has_transcript || @has_chat %>
-      <a href="#discussion">Transcript</a>
+      <a href="#discussion"><%= @strings["heading_transcript"] %></a>
       <% end %>
       <% if @summary && !@summary.empty? %>
-      <a href="#summary">Meeting Summary</a>
+      <a href="#summary"><%= @strings["heading_summary"] %></a>
       <% end %>
       <% if @action_items && !@action_items.empty? %>
-      <a href="#actions">Action Items</a>
+      <a href="#actions"><%= @strings["heading_action_items"] %></a>
       <% end %>
     </nav>
 
     <% if @shared_notes && !@shared_notes.empty? %>
     <section id="shared-notes" aria-labelledby="shared-notes-h">
-      <h2 id="shared-notes-h">Shared Notes</h2>
+      <h2 id="shared-notes-h"><%= @strings["heading_shared_notes"] %></h2>
       <%= @shared_notes %>
     </section>
     <% end %>
 
     <section id="attendees" aria-labelledby="attendees-h">
-      <h2 id="attendees-h">Attendees <span class="pill"><%= (@attendees&.size || @attendee_count || 0) %></span></h2>
+      <h2 id="attendees-h"><%= @strings["heading_attendees"] %> <span class="pill"><%= (@attendees&.size || @attendee_count || 0) %></span></h2>
       <% if @attendees && !@attendees.empty? %>
         <ul class="attendees">
           <% @attendees.each do |name| %>
@@ -126,18 +126,18 @@
           <% end %>
         </ul>
       <% else %>
-        <p class="muted">(No attendees recorded)</p>
+        <p class="muted"><%= @strings["no_attendees"] %></p>
       <% end %>
     </section>
 
     <% if @polls && !@polls.empty? %>
     <section id="polls" aria-labelledby="polls-h">
-      <h2 id="polls-h">Poll Results <span class="pill"><%= @polls.length %></span></h2>
+      <h2 id="polls-h"><%= @strings["heading_poll_results"] %> <span class="pill"><%= @polls.length %></span></h2>
       <% @polls.each_with_index do |poll, idx| %>
-        <h3 style="margin:.6em 0 .3em">Poll <%= idx + 1 %><% if poll[:question] && !poll[:question].empty? %>: <%= poll[:question] %><% end %></h3>
+        <h3 style="margin:.6em 0 .3em"><%= @strings["poll_prefix"] %> <%= idx + 1 %><% if poll[:question] && !poll[:question].empty? %>: <%= poll[:question] %><% end %></h3>
         <ul>
           <% (poll[:answers] || []).each do |answer| %>
-            <li><strong><%= answer[:text] %></strong> — <%= answer[:votes] %> <%= answer[:votes] == 1 ? 'vote' : 'votes' %></li>
+            <li><strong><%= answer[:text] %></strong> — <%= answer[:votes] %> <%= answer[:votes] == 1 ? @strings["vote_singular"] : @strings["vote_plural"] %></li>
           <% end %>
         </ul>
       <% end %>
@@ -146,30 +146,30 @@
 
     <% if @has_transcript || @has_chat %>
     <section id="discussion" aria-labelledby="discussion-h">
-      <h2 id="discussion-h">Transcript <span class="pill" id="timeline-count">0</span></h2>
+      <h2 id="discussion-h"><%= @strings["heading_transcript"] %> <span class="pill" id="timeline-count">0</span></h2>
       <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:12px;">
         <% if @has_chat %>
         <label style="display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:14px;cursor:pointer;">
-          <input type="checkbox" id="show-chat" <%= @include_chat ? 'checked' : '' %> onchange="renderTimeline()" /> Show chat messages
+          <input type="checkbox" id="show-chat" <%= @include_chat ? 'checked' : '' %> onchange="renderTimeline()" /> <%= @strings["show_chat_messages"] %>
         </label>
         <% end %>
         <% if @transcript_provider == 'openai_whisper' %>
         <label style="display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:14px;cursor:pointer;">
-          <input type="checkbox" id="group-cues" checked onchange="renderTimeline()" /> Group cues
+          <input type="checkbox" id="group-cues" checked onchange="renderTimeline()" /> <%= @strings["group_cues"] %>
         </label>
         <% end %>
       </div>
       <details class="transcript" open>
-        <summary>Expand / Collapse</summary>
+        <summary><%= @strings["expand_collapse"] %></summary>
         <div id="timeline-container"></div>
       </details>
-      <p class="muted" style="margin-top:8px">Timestamps relative to recording start.</p>
+      <p class="muted" style="margin-top:8px"><%= @strings["timestamps_note"] %></p>
     </section>
     <% end %>
 
     <% if @summary && !@summary.empty? %>
       <section id="summary" aria-labelledby="summary-h">
-        <h2 id="summary-h">Meeting Summary</h2>
+        <h2 id="summary-h"><%= @strings["heading_summary"] %></h2>
         <% if @summary_html && !@summary_html.empty? %>
           <%= @summary_html %>
         <% else %>
@@ -180,22 +180,24 @@
 
     <% if @action_items && !@action_items.empty? %>
       <section id="actions" aria-labelledby="actions-h">
-        <h2 id="actions-h">Action Items</h2>
+        <h2 id="actions-h"><%= @strings["heading_action_items"] %></h2>
         <ul>
           <% @action_items.each do |ai| %>
             <% klass = ai[:status] == :ok ? 'ok' : (ai[:status] == :warn ? 'warn' : '') %>
-            <li><span class="pill <%= klass %>">Owner: <%= ai[:owner] %></span> <%= ai[:label] %></li>
+            <li><span class="pill <%= klass %>"><%= @strings["action_item_owner"] %> <%= ai[:owner] %></span> <%= ai[:label] %></li>
           <% end %>
         </ul>
       </section>
     <% end %>
 
     <footer>
-      <p><%= @footer || "Generated by BigBlueButton Notes processor. Optimized for print and dark/light mode." %></p>
+      <p><%= @footer || @strings["footer_fallback"] %></p>
     </footer>
   </div>
 
   <script>
+    const I18N = <%= { lightMode: @strings["btn_light_mode"], darkMode: @strings["btn_dark_mode"], chatTag: @strings["chat_tag"] }.to_json %>;
+
     // Theme toggle
     (function() {
       const html = document.documentElement;
@@ -210,7 +212,7 @@
       const MOON = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 
       function updateBtn() {
-        if (btn) btn.innerHTML = isDark() ? `${SUN} Light mode` : `${MOON} Dark mode`;
+        if (btn) btn.innerHTML = isDark() ? `${SUN} ${I18N.lightMode}` : `${MOON} ${I18N.darkMode}`;
       }
 
       const saved = localStorage.getItem('theme');
@@ -297,7 +299,7 @@
           if (item.type === 'transcript') {
             return `<div class="discussion-item transcript-cue"><time>${fmtMs(item.start_ms)}</time><div><span class="speaker">${escHtml(item.speaker)}:</span> ${escHtml(item.text)}</div></div>`;
           } else {
-            return `<div class="discussion-item chat-msg"><time>${fmtMs(item.timestamp_ms)}</time><div>${CHAT_ICON}<span class="sender">${escHtml(item.sender)} <span class="pill" style="font-size:10px;padding:1px 5px;">chat</span>:</span> ${escHtml(item.message)}</div></div>`;
+            return `<div class="discussion-item chat-msg"><time>${fmtMs(item.timestamp_ms)}</time><div>${CHAT_ICON}<span class="sender">${escHtml(item.sender)} <span class="pill" style="font-size:10px;padding:1px 5px;">${I18N.chatTag}</span>:</span> ${escHtml(item.message)}</div></div>`;
           }
         }).join('');
 

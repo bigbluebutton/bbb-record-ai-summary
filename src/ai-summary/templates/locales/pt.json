@@ -1,0 +1,58 @@
+{
+  "lang_code": "pt",
+
+  "page_title_fallback": "Sessão BigBlueButton — Resumo & Transcrição",
+  "page_description": "Resumo HTML5 profissional de uma sessão BigBlueButton com participantes, notas compartilhadas, transcrição e itens de ação.",
+  "heading_fallback": "Sessão BigBlueButton — Resumo",
+  "html_subtitle_fallback": "Relatório HTML5 limpo e imprimível com notas compartilhadas, participantes, transcrição e itens de ação.",
+
+  "meeting_title_fallback": "Sessão BigBlueButton",
+  "subtitle_fallback": "Notas da reunião, transcrição e resumo gerado por IA",
+  "footer_prefix": "Gerado pelo BigBlueButton:",
+  "footer_fallback": "Gerado pelo processador de notas BigBlueButton.",
+  "duration_minute": "minuto",
+  "duration_minutes": "minutos",
+
+  "kpi_attendees": "Participantes",
+  "kpi_transcript": "Transcrição",
+  "kpi_words": "Palavras",
+
+  "btn_print": "Imprimir",
+  "btn_print_title": "Imprimir ou salvar como PDF",
+  "btn_theme_title": "Alternar tema claro/escuro",
+  "btn_collapse_title": "Expandir/recolher transcrição",
+  "btn_toggle_transcript": "Alternar transcrição",
+  "btn_light_mode": "Modo claro",
+  "btn_dark_mode": "Modo escuro",
+
+  "heading_shared_notes": "Notas Compartilhadas",
+  "heading_attendees": "Participantes",
+  "heading_poll_results": "Resultados das Enquetes",
+  "heading_transcript": "Transcrição",
+  "heading_discussion": "Discussão",
+  "heading_transcription_diarized": "Transcrição de Áudio (com Identificação de Falantes)",
+  "heading_transcription": "Transcrição de Áudio",
+  "heading_summary": "Resumo da Reunião",
+  "heading_action_items": "Itens de Ação",
+
+  "no_attendees": "(Nenhum participante registrado)",
+  "no_notes": "(Sem conteúdo de notas)",
+
+  "poll_prefix": "Enquete",
+  "vote_singular": "voto",
+  "vote_plural": "votos",
+
+  "show_chat_messages": "Exibir mensagens do chat",
+  "group_cues": "Agrupar legendas",
+  "expand_collapse": "Expandir / Recolher",
+  "timestamps_note": "Marcações de tempo relativas ao início da gravação.",
+  "action_item_owner": "Responsável:",
+  "chat_tag": "chat",
+  "transcript_format_labeled": "Com identificação de falantes",
+
+  "word_count_label": "Contagem de palavras:",
+  "word_count_unit": "palavras",
+
+  "month_names": ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
+  "date_format": "%-d de {month} de %Y às %-H:%M %Z"
+}
