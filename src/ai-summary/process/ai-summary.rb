@@ -1469,6 +1469,7 @@ unless FileTest.directory?(target_dir)
       word_count: word_count,
       transcript_format: locale_strings.fetch("transcript_format_labeled", "Speaker-labeled"),
       shared_notes: notes_html_content,
+      notes_plain_text: notes_plain_text,
       polls: polls,
       summary: summary,
       summary_html: summary_html,

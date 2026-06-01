@@ -24,6 +24,8 @@
   "btn_toggle_transcript": "Afficher/masquer la transcription",
   "btn_light_mode": "Mode clair",
   "btn_dark_mode": "Mode sombre",
+  "btn_copy": "Copier",
+  "btn_copy_done": "Copié !",
 
   "heading_shared_notes": "Notes partagées",
   "heading_attendees": "Participants",

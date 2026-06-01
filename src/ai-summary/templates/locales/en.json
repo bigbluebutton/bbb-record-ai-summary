@@ -24,6 +24,8 @@
   "btn_toggle_transcript": "Toggle transcript",
   "btn_light_mode": "Light mode",
   "btn_dark_mode": "Dark mode",
+  "btn_copy": "Copy",
+  "btn_copy_done": "Copied!",
 
   "heading_shared_notes": "Shared Notes",
   "heading_attendees": "Attendees",
