@@ -120,7 +120,7 @@
         <h2 id="shared-notes-h"><%= @strings["heading_shared_notes"] %></h2>
         <button class="copy-btn" type="button" onclick="copySection('notes', this)" title="<%= @strings['btn_copy'] || 'Copy' %>" aria-label="<%= @strings['btn_copy'] || 'Copy' %>"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></button>
       </div>
-      <%= @shared_notes %>
+      <div id="notes-content"><%= @shared_notes %></div>
     </section>
     <% end %>
 
@@ -315,8 +315,7 @@
       lines.join("\n")
     }.join("\n\n") -%>
     const COPY_DATA = {
-      notes:       <%= (@notes_plain_text || '').to_json %>,
-      attendees:   <%= (@attendees || []).join("\n").to_json %>,
+      attendees:   <%= (@attendees || []).map { |name| "- #{name};" }.join("\n").to_json %>,
       polls:       <%= polls_text.to_json %>,
       summary:     <%= (@summary || '').to_json %>,
       actionItems: <%= (@action_items || []).map { |ai| "#{ai[:owner]}: #{ai[:label]}" }.join("\n").to_json %>
@@ -325,6 +324,27 @@
     const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>';
 
     function copySection(key, btn) {
+      function flashBtn() {
+        const prev = btn.innerHTML;
+        btn.innerHTML = CHECK_SVG;
+        btn.style.color = 'var(--ok)';
+        btn.style.borderColor = 'var(--ok)';
+        setTimeout(() => { btn.innerHTML = prev; btn.style.color = ''; btn.style.borderColor = ''; }, 1500);
+      }
+
+      if (key === 'notes') {
+        const el = document.getElementById('notes-content');
+        if (!el || !el.innerHTML.trim()) return;
+        const writePromise = (typeof ClipboardItem !== 'undefined')
+          ? navigator.clipboard.write([new ClipboardItem({
+              'text/html': new Blob([el.innerHTML], { type: 'text/html' }),
+              'text/plain': new Blob([el.innerText], { type: 'text/plain' })
+            })])
+          : navigator.clipboard.writeText(el.innerText);
+        writePromise.then(flashBtn);
+        return;
+      }
+
       let text;
       if (key === 'transcript') {
         const showChat = document.getElementById('show-chat')?.checked ?? false;
@@ -332,24 +352,14 @@
         const cues = grouped ? groupCues(CUES, showChat ? CHAT : [], GAP_MS) : CUES;
         const items = [
           ...cues.map(c => ({ ts: c.start_ms, t: `[${fmtMs(c.start_ms)}] ${c.speaker}: ${c.text}` })),
-          ...(showChat ? CHAT.map(m => ({ ts: m.timestamp_ms, t: `[${fmtMs(m.timestamp_ms)}] ${m.sender}: ${m.message}` })) : [])
+          ...(showChat ? CHAT.map(m => ({ ts: m.timestamp_ms, t: `(Chat)[${fmtMs(m.timestamp_ms)}] ${m.sender}: ${m.message}` })) : [])
         ].sort((a, b) => a.ts - b.ts);
-        text = items.map(x => x.t).join('\n');
+        text = items.map(x => x.t).join('\n\n');
       } else {
         text = COPY_DATA[key] || '';
       }
       if (!text) return;
-      navigator.clipboard.writeText(text).then(() => {
-        const prev = btn.innerHTML;
-        btn.innerHTML = CHECK_SVG;
-        btn.style.color = 'var(--ok)';
-        btn.style.borderColor = 'var(--ok)';
-        setTimeout(() => {
-          btn.innerHTML = prev;
-          btn.style.color = '';
-          btn.style.borderColor = '';
-        }, 1500);
-      });
+      navigator.clipboard.writeText(text).then(flashBtn);
     }
 
     // Timeline rendering
