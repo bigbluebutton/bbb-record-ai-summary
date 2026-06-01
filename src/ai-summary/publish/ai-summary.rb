@@ -91,8 +91,17 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_
   end
 end
 
+STATIC_PUBLISHED_FILES = [
+  { filename: 'ai-summary.pdf',     type: 'pdf',  category: 'summary'       },
+  { filename: 'ai-summary.md',      type: 'md',   category: 'summary'       },
+  { filename: 'ai-summary.html',    type: 'html', category: 'summary'       },
+  { filename: 'ai-summary.json',    type: 'json', category: 'summary'       },
+  { filename: 'transcription.json', type: 'json', category: 'transcription' },
+  { filename: 'transcription.vtt',  type: 'vtt',  category: 'transcription' },
+].freeze
+
 # Helper method to update metadata.xml with playback information
-def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, provider_transcription_files, logger)
+def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, logger)
   logger.info("Updating metadata.xml with playback information")
 
   metadata = Nokogiri::XML(File.open(metadata_path))
@@ -114,10 +123,8 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
       xml.duration(recording_time.to_s)
       xml.extensions {
         xml.urls {
-          xml.url("#{base_url}/ai-summary.#{format}", type: format)
-          xml.url("#{base_url}/transcription.json", type: "json")
-          provider_transcription_files.each do |filename|
-            xml.url("#{base_url}/#{filename}", type: "json")
+          published_files.each do |f|
+            xml.url("#{base_url}/#{f[:filename]}", type: f[:type], category: f[:category])
           end
         }
       }
@@ -232,8 +239,13 @@ begin
   FileUtils.cp("#{process_dir}/metadata.xml", target_dir)
   BigBlueButton.logger.info("Copied metadata.xml file")
 
+  # Collect all published files: static files that exist + dynamic provider transcriptions
+  static_files   = STATIC_PUBLISHED_FILES.select { |f| File.exist?("#{target_dir}/#{f[:filename]}") }
+  provider_files = provider_transcription_files.map { |fn| { filename: fn, type: 'json', category: 'transcription' } }
+  published_files = static_files + provider_files
+
   metadata_path = "#{target_dir}/metadata.xml"
-  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, provider_transcription_files, BigBlueButton.logger)
+  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, BigBlueButton.logger)
 
   # Ensure publish directory exists
   FileUtils.mkdir_p(publish_dir) unless FileTest.directory?(publish_dir)

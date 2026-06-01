@@ -12,6 +12,9 @@ include_chat_in_discussion: true
 # Maximum gap (in seconds) between two consecutive cues from the same speaker
 # before they are treated as separate speech blocks in the HTML display.
 transcript_group_gap_seconds: 1
+# Locale for UI strings in the generated documents (ISO 639-1 code: 'en', 'fr', 'pt').
+# Falls back to 'en' if the locale file is not found.
+locale: 'en'
 
 # ── LLM summarization ─────────────────────────────────────
 llm:

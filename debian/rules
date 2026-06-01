@@ -52,6 +52,15 @@ override_dh_auto_install:
 	install -m 644 src/ai-summary/templates/ai-summary.json.erb \
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/playback/ai-summary/
 
+	# Locale files
+	install -d debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/playback/ai-summary/locales
+	install -m 644 src/ai-summary/templates/locales/en.json \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/playback/ai-summary/locales/
+	install -m 644 src/ai-summary/templates/locales/pt.json \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/playback/ai-summary/locales/
+	install -m 644 src/ai-summary/templates/locales/fr.json \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/playback/ai-summary/locales/
+
 	# Post-publish hook
 	install -d debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/scripts/post_publish
 	install -m 755 src/scripts/post_publish/publish_to_docs.rb \
