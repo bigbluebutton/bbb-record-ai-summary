@@ -24,7 +24,7 @@
 #
 # Logs to: $log_dir/ai-summary/post_publish-docs-<meeting_id>.log
 
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 require 'optimist'
 require 'yaml'
 require 'net/http'

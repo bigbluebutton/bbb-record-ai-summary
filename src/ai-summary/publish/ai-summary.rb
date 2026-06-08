@@ -19,8 +19,7 @@
 # with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
 #
 
-# For PRODUCTION - Use system library
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 require 'rubygems'
 require 'optimist'
 require 'yaml'

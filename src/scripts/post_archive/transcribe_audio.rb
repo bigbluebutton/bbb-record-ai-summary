@@ -41,7 +41,7 @@
 #   cd /usr/local/bigbluebutton/core && bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>
 #
 
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 require 'optimist'
 require 'yaml'
 require 'json'
