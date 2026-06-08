@@ -167,19 +167,8 @@ meeting_id, playback = parse_meeting_id(opts[:meeting_id])
 # Early exit if not ai-summary format
 exit 0 unless playback == "ai-summary"
 
-# Resolve configs — works in both local dev and production deployment
-script_dir = File.expand_path(__dir__)  # .../ai-summary/publish
-
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-
-if script_dir.start_with?(BBB_SCRIPTS_DIR)
-  bbb_props    = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
-  format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
-else
-  project_root = File.expand_path('../../..', script_dir)
-  bbb_props    = YAML.safe_load(File.read("#{project_root}/src/bigbluebutton.yml"))
-  format_props = load_format_config("#{project_root}/src/ai-summary.yml")
-end
+bbb_props    = BigBlueButton.read_props
+format_props = load_format_config('ai-summary.yml')
 
 # Set up paths
 log_dir = bbb_props['log_dir']

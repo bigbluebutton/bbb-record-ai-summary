@@ -50,7 +50,6 @@ unless format_name == 'ai-summary'
   exit 0
 end
 
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
 
 # Recursively merges +override+ into +base+, combining nested hashes key-by-key
 # so that only the keys present in +override+ are changed.
@@ -83,7 +82,7 @@ def load_docs_config(config_path, logger)
   full_config['docs']
 end
 
-bbb_props     = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
+bbb_props     = BigBlueButton.read_props
 log_dir       = bbb_props['log_dir']       || '/var/log/bigbluebutton'
 recording_dir = bbb_props['recording_dir'] || '/var/bigbluebutton/recording'
 publish_dir   = '/var/bigbluebutton/published/ai-summary'.freeze
@@ -96,7 +95,7 @@ logger.info('=== publish_to_docs post_publish ===')
 logger.info("Meeting ID : #{meeting_id}")
 logger.info("Format     : #{format_name}")
 
-cfg = load_docs_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml", logger)
+cfg = load_docs_config('ai-summary.yml', logger)
 if cfg.nil?
   logger.info('No docs: section in ai-summary.yml — skipping docs upload.')
   exit 0

@@ -393,11 +393,8 @@ transcription_props = load_transcription_config
 meeting_id = opts[:meeting_id]
 Optimist::die :meeting_id, 'is required' if meeting_id.nil? || meeting_id.strip.empty?
 
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-bbb_props_path  = "#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"
-
-if File.expand_path(__dir__) == "#{BBB_SCRIPTS_DIR}/post_archive" && File.exist?(bbb_props_path)
-  bbb_props     = YAML.safe_load(File.read(bbb_props_path))
+if File.expand_path(__dir__) == File.join(BigBlueButton.rap_scripts_path, 'post_archive')
+  bbb_props     = BigBlueButton.read_props
   log_dir       = bbb_props['log_dir'] || '/var/log/bigbluebutton'
   recording_dir = bbb_props['recording_dir'] || '/var/bigbluebutton/recording'
 else
