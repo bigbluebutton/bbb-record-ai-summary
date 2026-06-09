@@ -10,6 +10,7 @@ BBB_LIB="$BBB_CORE/lib"
 NGINX_DIR="/usr/share/bigbluebutton/nginx"
 WHISPER_INSTALL_DIR="/usr/local/bin/whisper.cpp"
 WHISPER_MODEL="base"
+INSTALL_WHISPER=false
 PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 POST_ARCHIVE_SRC="$PROJECT_ROOT/src/scripts/post_archive"
 POST_PUBLISH_SRC="$PROJECT_ROOT/src/scripts/post_publish"
@@ -20,14 +21,15 @@ DRY_RUN=false
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=true ;;
+    --install-whisper) INSTALL_WHISPER=true ;;
     *) echo "Unknown argument: $arg"; exit 1 ;;
   esac
 done
 
 echo "=== ai-summary + post_archive deploy ==="
-echo "BBB scripts : $BBB_SCRIPTS"
-echo "Nginx dir   : $NGINX_DIR"
-echo "Whisper dir : $WHISPER_INSTALL_DIR"
+echo "BBB scripts     : $BBB_SCRIPTS"
+echo "Nginx dir       : $NGINX_DIR"
+$INSTALL_WHISPER && echo "Whisper dir     : $WHISPER_INSTALL_DIR"
 $DRY_RUN && echo "(dry run — no files will be written)"
 echo ""
 
@@ -40,60 +42,62 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Ensure whisper.cpp is installed at $WHISPER_INSTALL_DIR
+# Optionally install whisper.cpp (pass --install-whisper to enable)
 # ---------------------------------------------------------------------------
-WHISPER_BIN=""
-if [ -f "$WHISPER_INSTALL_DIR/build/bin/whisper-cli" ]; then
-  WHISPER_BIN="$WHISPER_INSTALL_DIR/build/bin/whisper-cli"
-elif [ -f "$WHISPER_INSTALL_DIR/main" ]; then
-  WHISPER_BIN="$WHISPER_INSTALL_DIR/main"
-fi
-
-if [ -n "$WHISPER_BIN" ]; then
-  echo "[whisper.cpp] Already installed: $WHISPER_BIN"
-else
-  echo "[whisper.cpp] Not found at $WHISPER_INSTALL_DIR — installing..."
-
-  for pkg in build-essential git cmake ffmpeg; do
-    if ! dpkg -l "$pkg" &>/dev/null; then
-      echo "  Installing system package: $pkg"
-      apt-get install -y -qq "$pkg"
-    fi
-  done
-
-  if [ -d "$WHISPER_INSTALL_DIR" ]; then
-    echo "  Directory exists, pulling latest changes..."
-    git -C "$WHISPER_INSTALL_DIR" pull --quiet origin master || true
-  else
-    echo "  Cloning whisper.cpp..."
-    git clone --quiet https://github.com/ggerganov/whisper.cpp.git "$WHISPER_INSTALL_DIR"
-  fi
-
-  echo "  Building whisper.cpp..."
-  make -C "$WHISPER_INSTALL_DIR" -j"$(nproc)" 2>&1 | tail -5
-
+if $INSTALL_WHISPER; then
+  WHISPER_BIN=""
   if [ -f "$WHISPER_INSTALL_DIR/build/bin/whisper-cli" ]; then
     WHISPER_BIN="$WHISPER_INSTALL_DIR/build/bin/whisper-cli"
-    echo "  Build succeeded: $WHISPER_BIN"
   elif [ -f "$WHISPER_INSTALL_DIR/main" ]; then
     WHISPER_BIN="$WHISPER_INSTALL_DIR/main"
-    echo "  Build succeeded (legacy): $WHISPER_BIN"
-  else
-    echo "  ERROR: whisper.cpp build failed."
-    exit 1
   fi
-fi
 
-MODEL_FILE="$WHISPER_INSTALL_DIR/models/ggml-${WHISPER_MODEL}.bin"
-if [ -f "$MODEL_FILE" ]; then
-  echo "[whisper.cpp] Model already present: $MODEL_FILE"
-else
-  echo "[whisper.cpp] Downloading model '$WHISPER_MODEL'..."
-  bash "$WHISPER_INSTALL_DIR/models/download-ggml-model.sh" "$WHISPER_MODEL" 2>&1 \
-    || { echo "  ERROR: Model download failed."; exit 1; }
-  echo "  Model ready: $MODEL_FILE"
+  if [ -n "$WHISPER_BIN" ]; then
+    echo "[whisper.cpp] Already installed: $WHISPER_BIN"
+  else
+    echo "[whisper.cpp] Not found at $WHISPER_INSTALL_DIR — installing..."
+
+    for pkg in build-essential git cmake ffmpeg; do
+      if ! dpkg -l "$pkg" &>/dev/null; then
+        echo "  Installing system package: $pkg"
+        apt-get install -y -qq "$pkg"
+      fi
+    done
+
+    if [ -d "$WHISPER_INSTALL_DIR" ]; then
+      echo "  Directory exists, pulling latest changes..."
+      git -C "$WHISPER_INSTALL_DIR" pull --quiet origin master || true
+    else
+      echo "  Cloning whisper.cpp..."
+      git clone --quiet https://github.com/ggerganov/whisper.cpp.git "$WHISPER_INSTALL_DIR"
+    fi
+
+    echo "  Building whisper.cpp..."
+    make -C "$WHISPER_INSTALL_DIR" -j"$(nproc)" 2>&1 | tail -5
+
+    if [ -f "$WHISPER_INSTALL_DIR/build/bin/whisper-cli" ]; then
+      WHISPER_BIN="$WHISPER_INSTALL_DIR/build/bin/whisper-cli"
+      echo "  Build succeeded: $WHISPER_BIN"
+    elif [ -f "$WHISPER_INSTALL_DIR/main" ]; then
+      WHISPER_BIN="$WHISPER_INSTALL_DIR/main"
+      echo "  Build succeeded (legacy): $WHISPER_BIN"
+    else
+      echo "  ERROR: whisper.cpp build failed."
+      exit 1
+    fi
+  fi
+
+  MODEL_FILE="$WHISPER_INSTALL_DIR/models/ggml-${WHISPER_MODEL}.bin"
+  if [ -f "$MODEL_FILE" ]; then
+    echo "[whisper.cpp] Model already present: $MODEL_FILE"
+  else
+    echo "[whisper.cpp] Downloading model '$WHISPER_MODEL'..."
+    bash "$WHISPER_INSTALL_DIR/models/download-ggml-model.sh" "$WHISPER_MODEL" 2>&1 \
+      || { echo "  ERROR: Model download failed."; exit 1; }
+    echo "  Model ready: $MODEL_FILE"
+  fi
+  echo ""
 fi
-echo ""
 
 # ---------------------------------------------------------------------------
 # Ensure pandoc + xelatex are installed (for Markdown → PDF conversion)
