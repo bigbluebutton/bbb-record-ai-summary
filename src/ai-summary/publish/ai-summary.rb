@@ -19,8 +19,7 @@
 # with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
 #
 
-# For PRODUCTION - Use system library
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 require 'rubygems'
 require 'optimist'
 require 'yaml'
@@ -104,7 +103,7 @@ STATIC_PUBLISHED_FILES = [
 def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, logger)
   logger.info("Updating metadata.xml with playback information")
 
-  metadata = Nokogiri::XML(File.open(metadata_path))
+  metadata = File.open(metadata_path) { |f| Nokogiri::XML(f) }
   recording = metadata.root
 
   # Update state and published status
@@ -168,19 +167,8 @@ meeting_id, playback = parse_meeting_id(opts[:meeting_id])
 # Early exit if not ai-summary format
 exit 0 unless playback == "ai-summary"
 
-# Resolve configs — works in both local dev and production deployment
-script_dir = File.expand_path(__dir__)  # .../ai-summary/publish
-
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-
-if script_dir.start_with?(BBB_SCRIPTS_DIR)
-  bbb_props    = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
-  format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
-else
-  project_root = File.expand_path('../../..', script_dir)
-  bbb_props    = YAML.safe_load(File.read("#{project_root}/src/bigbluebutton.yml"))
-  format_props = load_format_config("#{project_root}/src/ai-summary.yml")
-end
+bbb_props    = BigBlueButton.read_props
+format_props = load_format_config('ai-summary.yml')
 
 # Set up paths
 log_dir = bbb_props['log_dir']
@@ -231,7 +219,7 @@ begin
   provider_transcription_files = copy_provider_transcriptions(process_dir, target_dir, BigBlueButton.logger)
 
   # Get recording duration
-  events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
+  events_doc = File.open("#{raw_archive_dir}/events.xml") { |f| Nokogiri::XML(f) }
   recording_time = BigBlueButton::Events.get_recording_length(events_doc)
 
   # Copy and update metadata.xml

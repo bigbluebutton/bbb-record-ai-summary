@@ -19,8 +19,7 @@
 # with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
 #
 
-# For PRODUCTION - Use system library
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 
 require 'rubygems'
 require 'optimist'
@@ -1271,21 +1270,8 @@ end
 
 meeting_id = opts[:meeting_id]
 
-# Resolve directories — works in both local dev and production deployment
-script_dir  = File.expand_path(__dir__)           # .../process
-
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-
-if script_dir.start_with?("#{BBB_SCRIPTS_DIR}")
-  # Production: configs live directly in the BBB scripts directory
-  props        = YAML.safe_load(File.read("#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"))
-  format_props = load_format_config("#{BBB_SCRIPTS_DIR}/ai-summary.yml")
-else
-  # Development: configs are in the project root config/ directory
-  project_root = File.expand_path('../../..', script_dir)
-  props        = YAML.safe_load(File.read("#{project_root}/src/bigbluebutton.yml"))
-  format_props = load_format_config("#{project_root}/src/ai-summary.yml")
-end
+props        = BigBlueButton.read_props
+format_props = load_format_config('ai-summary.yml')
 
 include_chat_in_discussion      = format_props.fetch('include_chat_in_discussion', true)
 transcript_group_gap_ms         = (format_props.fetch('transcript_group_gap_seconds', 5).to_f * 1000).to_i
@@ -1317,7 +1303,7 @@ unless FileTest.directory?(target_dir)
     end
 
     # Load events.xml for metadata and extraction
-    events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
+    events_doc = File.open("#{raw_archive_dir}/events.xml") { |f| Nokogiri::XML(f) }
 
     # Initialize notes extractor and extract content
     notes_extractor = Extractors::NotesExtractor.new

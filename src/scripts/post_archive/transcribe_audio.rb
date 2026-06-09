@@ -41,7 +41,7 @@
 #   cd /usr/local/bigbluebutton/core && bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>
 #
 
-require '/usr/local/bigbluebutton/core/lib/recordandplayback'
+require File.expand_path('../../../lib/recordandplayback', __FILE__)
 require 'optimist'
 require 'yaml'
 require 'json'
@@ -49,13 +49,6 @@ require 'fileutils'
 require 'logger'
 require 'timeout'
 require 'nokogiri'
-
-# Helpers
-def log(logger, level, msg)
-  logger.send(level, msg)
-  prefix = level == :error ? 'ERROR' : level == :warn ? 'WARN ' : 'INFO '
-  $stdout.puts "[#{prefix}] #{msg}"
-end
 
 # Spawns a child process and waits for it to finish.
 # If timeout_seconds is given and the process exceeds it, sends SIGTERM and
@@ -146,8 +139,7 @@ end
 
 # Backend: custom transcribe.rb script
 class CustomScriptBackend
-  def initialize(logger, custom_path)
-    @logger = logger
+  def initialize(custom_path)
     @script = custom_path
   end
 
@@ -156,23 +148,23 @@ class CustomScriptBackend
   end
 
   def report_status
-    log(@logger, :info, "Back-end: #{@script}")
+    BigBlueButton.logger.info("Back-end: #{@script}")
   end
 
   def transcribe(audio_file, output_json, events_xml, timeout_seconds: nil)
-    log(@logger, :info, "Running #{File.basename(@script)}: #{File.basename(audio_file)}")
+    BigBlueButton.logger.info("Running #{File.basename(@script)}: #{File.basename(audio_file)}")
     ok = run_process_with_timeout(timeout_seconds, @script, audio_file, output_json, events_xml,
                                   [:out, :err] => '/dev/null')
 
     if ok && File.exist?(output_json)
-      log(@logger, :info, "  -> #{File.basename(output_json)}")
+      BigBlueButton.logger.info("  -> #{File.basename(output_json)}")
       true
     else
-      log(@logger, :error, "Custom script failed for #{File.basename(audio_file)} (exit: #{$?.exitstatus})")
+      BigBlueButton.logger.error("Custom script failed for #{File.basename(audio_file)} (exit: #{$?.exitstatus})")
       false
     end
   rescue Timeout::Error
-    log(@logger, :error, "Custom script timed out after #{timeout_seconds}s: #{File.basename(audio_file)}")
+    BigBlueButton.logger.error("Custom script timed out after #{timeout_seconds}s: #{File.basename(audio_file)}")
     false
   end
 
@@ -211,7 +203,7 @@ rescue
   nil
 end
 
-def attempt_transcription(backend, audio_file, temp_json, events_xml, logger, retry_config:)
+def attempt_transcription(backend, audio_file, temp_json, events_xml, retry_config:)
   basename         = File.basename(audio_file)
   max_attempts     = retry_config[:max_attempts]
   wait             = retry_config[:initial_wait_seconds]
@@ -219,16 +211,16 @@ def attempt_transcription(backend, audio_file, temp_json, events_xml, logger, re
   duration_s       = audio_duration_seconds(audio_file) || 0
   dynamic_timeout  = (duration_s * retry_config[:transcription_timeout_factor]).ceil
   timeout_seconds  = [retry_config[:attempt_timeout_seconds], dynamic_timeout].max
-  log(logger, :info, "  Timeout for #{basename}: #{timeout_seconds}s " \
-                     "(floor=#{retry_config[:attempt_timeout_seconds]}s, " \
-                     "dynamic=#{dynamic_timeout}s from #{duration_s.round(1)}s audio)")
+  BigBlueButton.logger.info("  Max wait time for #{basename}: #{timeout_seconds}s " \
+                            "(floor=#{retry_config[:attempt_timeout_seconds]}s, " \
+                            "dynamic=#{dynamic_timeout}s from #{duration_s.round(1)}s audio)")
 
   max_attempts.times do |attempt|
     File.delete(temp_json) if File.exist?(temp_json)
     return true if backend.transcribe(audio_file, temp_json, events_xml, timeout_seconds: timeout_seconds)
 
     if attempt + 1 < max_attempts
-      log(logger, :warn, "  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
+      BigBlueButton.logger.warn("  Attempt #{attempt + 1}/#{max_attempts} failed for #{basename}, retrying in #{wait}s...")
       sleep(wait)
       wait *= 2
     end
@@ -237,7 +229,7 @@ def attempt_transcription(backend, audio_file, temp_json, events_xml, logger, re
   false
 end
 
-def parse_track_result(temp_json, basename, logger)
+def parse_track_result(temp_json, basename)
   raw      = JSON.parse(File.read(temp_json))
   segments = (raw['transcription'] || []).map do |s|
     seg = { 'offsets' => s['offsets'], 'text' => s['text'].to_s.strip }
@@ -247,7 +239,7 @@ def parse_track_result(temp_json, basename, logger)
   end.reject { |s| s['text'].empty? }
 
   metadata = raw['metadata'] || {}
-  log(logger, :info, "  #{basename}: #{segments.size} segment(s)")
+  BigBlueButton.logger.info("  #{basename}: #{segments.size} segment(s)")
 
   {
     file:            basename,
@@ -258,11 +250,11 @@ def parse_track_result(temp_json, basename, logger)
     quality_metrics: metadata['quality_metrics']
   }
 rescue JSON::ParserError => e
-  log(logger, :error, "Failed to parse temp JSON for #{basename}: #{e.message}")
+  BigBlueButton.logger.error("Failed to parse temp JSON for #{basename}: #{e.message}")
   { file: basename, segments: [], ok: false }
 end
 
-def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, logger, provider_name:, semaphore:, retry_config:)
+def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, provider_name:, semaphore:, retry_config:)
   threads = audio_files.map do |audio_file|
     Thread.new do
       basename  = File.basename(audio_file)
@@ -270,11 +262,11 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
 
       begin
         success = semaphore.synchronize do
-          attempt_transcription(backend, audio_file, temp_json, events_xml, logger, retry_config: retry_config)
+          attempt_transcription(backend, audio_file, temp_json, events_xml, retry_config: retry_config)
         end
         next({ file: basename, segments: [], ok: false }) unless success
 
-        parse_track_result(temp_json, basename, logger)
+        parse_track_result(temp_json, basename)
       ensure
         File.delete(temp_json) if File.exist?(temp_json)
       end
@@ -284,19 +276,19 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
   threads.map(&:value)
 end
 
-def resolve_active_backends(providers, logger)
+def resolve_active_backends(providers)
   if providers.any?
     active = providers.each_with_object([]) do |p, result|
-      candidate = CustomScriptBackend.new(logger, p[:path])
+      candidate = CustomScriptBackend.new(p[:path])
       if candidate.available?
         result << { name: p[:name], backend: candidate }
       else
-        log(logger, :warn, "Provider '#{p[:name]}' not available at #{p[:path]} — skipping")
+        BigBlueButton.logger.warn("Provider '#{p[:name]}' not available at #{p[:path]} — skipping")
       end
     end
 
     if active.empty?
-      log(logger, :warn, "No configured providers are available — skipping transcription.")
+      BigBlueButton.logger.warn("No configured providers are available — skipping transcription.")
       exit 0
     end
 
@@ -309,15 +301,15 @@ def resolve_active_backends(providers, logger)
       File.expand_path('../../transcription/whisper_cpp.rb', __dir__)
     end
 
-    candidate = CustomScriptBackend.new(logger, whisper_script)
+    candidate = CustomScriptBackend.new(whisper_script)
     unless candidate.available?
-      log(logger, :error, "whisper_cpp.rb not found or not executable at #{whisper_script}")
-      log(logger, :error, "Install whisper.cpp or configure transcriber_path in transcription.yml")
-      log(logger, :warn, "No transcription backend available — skipping transcription.")
+      BigBlueButton.logger.error("whisper_cpp.rb not found or not executable at #{whisper_script}")
+      BigBlueButton.logger.error("Install whisper.cpp or configure transcriber_path in transcription.yml")
+      BigBlueButton.logger.warn("No transcription backend available — skipping transcription.")
       exit 0
     end
 
-    log(logger, :info, "Back-end: whisper.cpp (built-in fallback via #{File.basename(whisper_script)})")
+    BigBlueButton.logger.info("Back-end: whisper.cpp (built-in fallback via #{File.basename(whisper_script)})")
     [{ name: 'whisper_cpp', backend: candidate }]
   end
 end
@@ -348,12 +340,12 @@ def aggregate_quality_metrics(track_results)
   }
 end
 
-def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, logger, audio_semaphore:, retry_config:)
-  log(logger, :info, "=== Provider: #{provider[:name]} ===")
+def run_provider_transcription(provider, audio_files, transcription_dir, events_xml, meeting_id, canonical_path, audio_semaphore:, retry_config:)
+  BigBlueButton.logger.info("=== Provider: #{provider[:name]} ===")
   provider[:backend].report_status
 
   track_results = transcribe_audio_files(
-    provider[:backend], audio_files, transcription_dir, events_xml, logger,
+    provider[:backend], audio_files, transcription_dir, events_xml,
     provider_name: provider[:name],
     semaphore:     audio_semaphore,
     retry_config:  retry_config
@@ -375,11 +367,11 @@ def run_provider_transcription(provider, audio_files, transcription_dir, events_
 
   provider_json = File.join(transcription_dir, "transcription_#{provider[:name]}.json")
   File.write(provider_json, JSON.pretty_generate(merged))
-  log(logger, :info, "Written: #{provider_json}")
+  BigBlueButton.logger.info("Written: #{provider_json}")
 
   if canonical_path
     File.write(canonical_path, JSON.pretty_generate(merged))
-    log(logger, :info, "Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+    BigBlueButton.logger.info("Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
   end
 
   {
@@ -401,11 +393,8 @@ transcription_props = load_transcription_config
 meeting_id = opts[:meeting_id]
 Optimist::die :meeting_id, 'is required' if meeting_id.nil? || meeting_id.strip.empty?
 
-BBB_SCRIPTS_DIR = '/usr/local/bigbluebutton/core/scripts'.freeze
-bbb_props_path  = "#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"
-
-if File.expand_path(__dir__) == "#{BBB_SCRIPTS_DIR}/post_archive" && File.exist?(bbb_props_path)
-  bbb_props     = YAML.safe_load(File.read(bbb_props_path))
+if File.expand_path(__dir__) == File.join(BigBlueButton.rap_scripts_path, 'post_archive')
+  bbb_props     = BigBlueButton.read_props
   log_dir       = bbb_props['log_dir'] || '/var/log/bigbluebutton'
   recording_dir = bbb_props['recording_dir'] || '/var/bigbluebutton/recording'
 else
@@ -418,12 +407,11 @@ end
 FileUtils.mkdir_p(log_dir) if log_dir
 log_path = "#{log_dir}/post_archive-transcribe-#{meeting_id}.log"
 
-$stdout.sync = true
 logger = Logger.new(log_path)
 logger.level = Logger::INFO
 BigBlueButton.logger = logger
 
-log(logger, :info, "Meeting ID : #{meeting_id}")
+BigBlueButton.logger.info("Meeting ID : #{meeting_id}")
 
 # Paths + audio discovery
 raw_dir           = "#{recording_dir}/raw/#{meeting_id}"
@@ -431,28 +419,28 @@ audio_dir         = "#{raw_dir}/audio"
 transcription_dir = "#{raw_dir}/transcription"
 
 unless Dir.exist?(raw_dir)
-  log(logger, :error, "Raw recording directory not found: #{raw_dir}")
+  BigBlueButton.logger.error("Raw recording directory not found: #{raw_dir}")
   exit 1
 end
 
 FileUtils.mkdir_p(transcription_dir)
-log(logger, :info, "Transcription output: #{transcription_dir}")
+BigBlueButton.logger.info("Transcription output: #{transcription_dir}")
 
 AUDIO_EXTENSIONS = %w[webm opus mp3 wav ogg m4a flac].freeze
 
 audio_files = AUDIO_EXTENSIONS.flat_map { |ext| Dir.glob("#{audio_dir}/*.#{ext}") }.sort
 
 if audio_files.empty?
-  log(logger, :warn, "No audio files found in #{audio_dir} — nothing to transcribe.")
+  BigBlueButton.logger.warn("No audio files found in #{audio_dir} — nothing to transcribe.")
   exit 0
 end
 
-log(logger, :info, "Found #{audio_files.size} audio file(s)")
+BigBlueButton.logger.info("Found #{audio_files.size} audio file(s)")
 
 providers       = get_normalized_transcriber_paths(transcription_props['transcriber_path'])
-active_backends = resolve_active_backends(providers, logger)
+active_backends = resolve_active_backends(providers)
 
-log(logger, :info, "Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
+BigBlueButton.logger.info("Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
 
 start_time = Time.now
 
@@ -460,7 +448,7 @@ start_time = Time.now
 OUTPUT_JSON = File.join(transcription_dir, 'transcription.json').freeze
 
 if File.exist?(OUTPUT_JSON)
-  log(logger, :info, "transcription.json already exists — skipping (delete it to re-run)")
+  BigBlueButton.logger.info("transcription.json already exists — skipping (delete it to re-run)")
   exit 0
 end
 
@@ -469,16 +457,16 @@ events_xml = File.join(raw_dir, 'events.xml')
 audio_backend = if File.exist?(events_xml)
   detect_audio_backend(Nokogiri::XML(File.read(events_xml)))
 else
-  log(logger, :warn, "events.xml not found — defaulting to livekit backend")
+  BigBlueButton.logger.warn("events.xml not found — defaulting to livekit backend")
   :livekit
 end
 ENV['BBB_AUDIO_BACKEND'] = audio_backend.to_s
-log(logger, :info, "Audio backend: #{audio_backend}")
+BigBlueButton.logger.info("Audio backend: #{audio_backend}")
 
 max_parallel_providers   = (transcription_props['max_parallel_providers']   || 1).to_i
 max_parallel_audio_files = (transcription_props['max_parallel_audio_files'] || 1).to_i
 
-log(logger, :info, "Parallelism: providers=#{max_parallel_providers}, audio_files=#{max_parallel_audio_files}")
+BigBlueButton.logger.info("Parallelism: providers=#{max_parallel_providers}, audio_files=#{max_parallel_audio_files}")
 
 retry_cfg    = transcription_props.fetch('retry', {})
 max_attempts         = (retry_cfg['max_attempts']         || 5).to_i
@@ -490,10 +478,10 @@ retry_config = {
   transcription_timeout_factor: (transcription_props['transcription_timeout_factor'] || 0.5).to_f
 }
 
-log(logger, :info, "Retry: max_attempts=#{retry_config[:max_attempts]}, " \
-                   "initial_wait=#{retry_config[:initial_wait_seconds]}s, " \
-                   "timeout_floor=#{retry_config[:attempt_timeout_seconds]}s, " \
-                   "transcription_timeout_factor=#{retry_config[:transcription_timeout_factor]}")
+BigBlueButton.logger.info("Retry: max_attempts=#{retry_config[:max_attempts]}, " \
+                          "initial_wait=#{retry_config[:initial_wait_seconds]}s, " \
+                          "timeout_floor=#{retry_config[:attempt_timeout_seconds]}s, " \
+                          "transcription_timeout_factor=#{retry_config[:transcription_timeout_factor]}")
 
 provider_semaphore = Semaphore.new(max_parallel_providers)
 audio_semaphore    = Semaphore.new(max_parallel_audio_files)
@@ -502,7 +490,7 @@ provider_threads = active_backends.each_with_index.map do |entry, idx|
   canonical = idx.zero? ? OUTPUT_JSON : nil
   Thread.new do
     provider_semaphore.synchronize do
-      run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical, logger,
+      run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical,
                                  audio_semaphore: audio_semaphore,
                                  retry_config:    retry_config)
     end
@@ -511,22 +499,22 @@ end
 
 provider_summaries = provider_threads.map(&:value)
 
-log(logger, :info, "=== Transcription complete ===")
-log(logger, :info, "  Providers run    : #{provider_summaries.size}")
+BigBlueButton.logger.info("=== Transcription complete ===")
+BigBlueButton.logger.info("  Providers run    : #{provider_summaries.size}")
 
 provider_summaries.each do |ps|
-  log(logger, :info, "  [#{ps[:name]}] tracks succeeded: #{ps[:ok_count]} / #{audio_files.size}, segments: #{ps[:total_segments]}")
+  BigBlueButton.logger.info("  [#{ps[:name]}] tracks succeeded: #{ps[:ok_count]} / #{audio_files.size}, segments: #{ps[:total_segments]}")
   ps[:track_results].reject { |r| r[:ok] }.each do |r|
-    log(logger, :warn, "  [#{ps[:name]}] FAILED: #{r[:file]}")
+    BigBlueButton.logger.warn("  [#{ps[:name]}] FAILED: #{r[:file]}")
   end
   if ps[:failed_count] > 0
-    log(logger, :warn, "  [#{ps[:name]}] #{ps[:failed_count]} track(s) failed — partial output retained")
+    BigBlueButton.logger.warn("  [#{ps[:name]}] #{ps[:failed_count]} track(s) failed — partial output retained")
   end
 end
 
-log(logger, :info, "  Canonical output : #{OUTPUT_JSON}")
-log(logger, :info, "  Elapsed time  : #{(Time.now - start_time).round(1)}s")
-log(logger, :info, "  (Processes for providers: #{max_parallel_providers})")
-log(logger, :info, "  (Processes for audio files: #{max_parallel_audio_files})")
+BigBlueButton.logger.info("  Canonical output : #{OUTPUT_JSON}")
+BigBlueButton.logger.info("  Elapsed time  : #{(Time.now - start_time).round(1)}s")
+BigBlueButton.logger.info("  (Processes for providers: #{max_parallel_providers})")
+BigBlueButton.logger.info("  (Processes for audio files: #{max_parallel_audio_files})")
 
 exit 0
