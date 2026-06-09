@@ -1303,7 +1303,7 @@ unless FileTest.directory?(target_dir)
     end
 
     # Load events.xml for metadata and extraction
-    events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
+    events_doc = File.open("#{raw_archive_dir}/events.xml") { |f| Nokogiri::XML(f) }
 
     # Initialize notes extractor and extract content
     notes_extractor = Extractors::NotesExtractor.new

@@ -79,13 +79,12 @@ def load_docs_config(config_path, logger)
     logger.info("Applied config override from #{override_path}")
   end
 
-  full_config['docs']
+  full_config
 end
 
 bbb_props     = BigBlueButton.read_props
 log_dir       = bbb_props['log_dir']       || '/var/log/bigbluebutton'
 recording_dir = bbb_props['recording_dir'] || '/var/bigbluebutton/recording'
-publish_dir   = '/var/bigbluebutton/published/ai-summary'.freeze
 
 FileUtils.mkdir_p("#{log_dir}/ai-summary")
 logger = Logger.new("#{log_dir}/ai-summary/post_publish-docs-#{meeting_id}.log", 'daily')
@@ -95,7 +94,14 @@ logger.info('=== publish_to_docs post_publish ===')
 logger.info("Meeting ID : #{meeting_id}")
 logger.info("Format     : #{format_name}")
 
-cfg = load_docs_config('ai-summary.yml', logger)
+format_props = load_docs_config('ai-summary.yml', logger)
+if format_props.nil?
+  logger.info('No ai-summary.yml found — skipping docs upload.')
+  exit 0
+end
+
+publish_dir = format_props['publish_dir']
+cfg         = format_props['docs']
 if cfg.nil?
   logger.info('No docs: section in ai-summary.yml — skipping docs upload.')
   exit 0

@@ -103,7 +103,7 @@ STATIC_PUBLISHED_FILES = [
 def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, logger)
   logger.info("Updating metadata.xml with playback information")
 
-  metadata = Nokogiri::XML(File.open(metadata_path))
+  metadata = File.open(metadata_path) { |f| Nokogiri::XML(f) }
   recording = metadata.root
 
   # Update state and published status
@@ -219,7 +219,7 @@ begin
   provider_transcription_files = copy_provider_transcriptions(process_dir, target_dir, BigBlueButton.logger)
 
   # Get recording duration
-  events_doc = Nokogiri::XML(File.open("#{raw_archive_dir}/events.xml"))
+  events_doc = File.open("#{raw_archive_dir}/events.xml") { |f| Nokogiri::XML(f) }
   recording_time = BigBlueButton::Events.get_recording_length(events_doc)
 
   # Copy and update metadata.xml
