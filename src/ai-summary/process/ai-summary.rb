@@ -330,17 +330,11 @@ module Extractors
     end
   end
   class NotesExtractor
-    attr_reader :word_count
-
-    def initialize
-      @word_count = 0
-    end
-
     def extract(raw_archive_dir, html_to_plain_text_method, logger)
       notes_html_file = "#{raw_archive_dir}/notes/notes.html"
 
       unless File.exist?(notes_html_file)
-        logger.warn("notes.html not found, word count will be 0")
+        logger.warn("notes.html not found")
         return nil
       end
 
@@ -348,11 +342,6 @@ module Extractors
       text_content = html_to_plain_text_method.call(html_content)
 
       return nil if text_content.strip.empty?
-
-      # Count words
-      words = text_content.split(/\s+/)
-      @word_count = words.length
-      logger.info("Extracted notes: #{@word_count} words")
 
       sanitized_html = html_content.gsub(/<style([^>]*)>(.*?)<\/style>/im) do
         attrs = Regexp.last_match(1)
@@ -1197,7 +1186,7 @@ def extract_meta_prompt_addition(raw_archive_dir)
 end
 
 # Helper method to build complete metadata XML
-def build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
+def build_metadata_xml(meeting_id, events_doc, raw_archive_dir)
   # Extract timing information
   meeting_start = events_doc.xpath("//event")[0][:timestamp]
   meeting_end = events_doc.xpath("//event").last[:timestamp]
@@ -1221,7 +1210,6 @@ def build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
         builder.method_missing(k, v)
       }
     }
-    builder.wordcount(word_count)
   }
 
   # Parse and append breakout room info if present
@@ -1310,8 +1298,6 @@ unless FileTest.directory?(target_dir)
     notes_content = notes_extractor.extract(raw_archive_dir, method(:html_to_plain_text), BigBlueButton.logger)
     notes_plain_text = notes_content&.fetch(:plain_text)
     notes_html_content = notes_content&.fetch(:html)
-    word_count = notes_extractor.word_count
-
     # Extract all other data using extractors
     attendees = Extractors::AttendeesExtractor.extract(events_doc, BigBlueButton.logger)
 
@@ -1397,7 +1383,6 @@ unless FileTest.directory?(target_dir)
     # Collect all data for markdown template
     md_template_data = {
       notes_content: notes_plain_text,
-      word_count: word_count,
       attendees: attendees,
       transcript: transcript_plain,
       transcript_diarized: grouped_transcript_cues,
@@ -1412,7 +1397,7 @@ unless FileTest.directory?(target_dir)
     template_path = "#{playback_dir}/ai-summary.md.erb"
     notes_md_content = render_markdown_into_template(template_path, md_template_data)
     File.write("#{target_dir}/ai-summary.md", notes_md_content)
-    BigBlueButton.logger.info("Created ai-summary.md with #{word_count} words and #{attendees.length} attendees")
+    BigBlueButton.logger.info("Created ai-summary.md with #{attendees.length} attendees")
 
     # Generate HTML report
     BigBlueButton.logger.info("Rendering ai-summary.html from template")
@@ -1452,7 +1437,6 @@ unless FileTest.directory?(target_dir)
       subtitle: subtitle,
       attendees: attendees,
       attendee_count: attendees.length,
-      word_count: word_count,
       transcript_format: locale_strings.fetch("transcript_format_labeled", "Speaker-labeled"),
       shared_notes: notes_html_content,
       notes_plain_text: notes_plain_text,
@@ -1489,11 +1473,11 @@ unless FileTest.directory?(target_dir)
     File.write("#{target_dir}/ai-summary.json", json_content)
     BigBlueButton.logger.info("Created ai-summary.json")
 
-    metadata = build_metadata_xml(meeting_id, events_doc, raw_archive_dir, word_count)
+    metadata = build_metadata_xml(meeting_id, events_doc, raw_archive_dir)
 
     # Write metadata.xml
     File.write("#{target_dir}/metadata.xml", metadata.root)
-    BigBlueButton.logger.info("Created metadata.xml with state=processed, timing info, and word count (#{word_count})")
+    BigBlueButton.logger.info("Created metadata.xml with state=processed and timing info")
 
     # Write status file
     File.write("#{recording_dir}/status/processed/#{meeting_id}-ai-summary.done", "Processed #{meeting_id}")
