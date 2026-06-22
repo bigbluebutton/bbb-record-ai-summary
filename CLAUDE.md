@@ -329,3 +329,15 @@ tail -f /var/log/bigbluebutton/ai-summary/process-<meeting_id>.log
 # Publish stage
 tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log
 ```
+
+## Pull Request Format
+
+PR descriptions must briefly describe what has been done in two sections:
+
+```
+### What does this PR do?
+- Bullet list of changes
+
+### Motivation
+Prose explanation of the motivation behind each change.
+```
