@@ -1268,7 +1268,6 @@ transcript_group_gap_ms         = (format_props.fetch('transcript_group_gap_seco
 recording_dir = props['recording_dir']
 raw_archive_dir = "#{recording_dir}/raw/#{meeting_id}"
 log_dir = props['log_dir']
-shared_notes_pdf_file = "#{raw_archive_dir}/notes/notes.pdf"
 target_dir = "#{recording_dir}/process/ai-summary/#{meeting_id}"
 playback_dir = format_props['playback_dir']
 
@@ -1283,12 +1282,6 @@ unless FileTest.directory?(target_dir)
   prompt_addition = extract_meta_prompt_addition(raw_archive_dir)
 
   begin
-    # Copy notes file if present
-    if File.exist?(shared_notes_pdf_file)
-      FileUtils.cp(shared_notes_pdf_file, "#{target_dir}/ai-summary.pdf")
-    else
-      BigBlueButton.logger.info("No notes file found for #{meeting_id}, continuing without it")
-    end
 
     # Load events.xml for metadata and extraction
     events_doc = File.open("#{raw_archive_dir}/events.xml") { |f| Nokogiri::XML(f) }
