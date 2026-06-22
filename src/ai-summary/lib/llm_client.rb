@@ -7,7 +7,7 @@ module LLMClient
   class Base
     attr_reader :config, :provider_config
 
-    def self.get_config_path()
+    def self.get_config_path(logger)
       bbb_core = '/usr/local/bigbluebutton/core'
       config_path = if __dir__.start_with?(bbb_core)
         "#{bbb_core}/scripts/ai-summary.yml"
@@ -52,7 +52,7 @@ module LLMClient
     end
 
     def self.create(logger, language: nil, prompt_addition: nil)
-      llm_config_path = get_config_path()
+      llm_config_path = get_config_path(logger)
 
       config = load_llm_config(llm_config_path, logger)
       provider = config['provider']
