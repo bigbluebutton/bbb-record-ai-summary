@@ -63,10 +63,9 @@ def parse_meeting_id(meeting_id_with_format)
 end
 
 # Helper method to convert markdown to PDF using pandoc
-def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, logger)
+def convert_markdown_to_pdf(source_md, output_pdf, logger)
   unless File.exist?(source_md)
-    logger.warn("ai-summary.md not found at #{source_md}, using original PDF")
-    FileUtils.cp(shared_notes_pdf_file, target_dir)
+    logger.warn("ai-summary.md not found at #{source_md}, skipping PDF generation")
     return false
   end
 
@@ -80,12 +79,9 @@ def convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_
   if $?.success? && File.exist?(output_pdf)
     logger.info("Successfully generated PDF from markdown using pandoc")
     logger.info("PDF size: #{File.size(output_pdf)} bytes")
-
     true
   else
     logger.error("Pandoc conversion failed: #{result}")
-    logger.warn("Falling back to original PDF")
-    FileUtils.cp(shared_notes_pdf_file, target_dir)
     false
   end
 end
@@ -200,11 +196,10 @@ begin
   FileUtils.mkdir_p target_dir
 
   # Convert markdown to PDF if available
-  shared_notes_pdf_file = "#{process_dir}/ai-summary.pdf"
   source_md = "#{process_dir}/ai-summary.md"
   output_pdf = "#{target_dir}/ai-summary.pdf"
 
-  convert_markdown_to_pdf(source_md, output_pdf, target_dir, shared_notes_pdf_file, BigBlueButton.logger)
+  convert_markdown_to_pdf(source_md, output_pdf, BigBlueButton.logger)
 
   copy_process_file_to_publish_dir("ai-summary.md", "ai-summary.md", process_dir, target_dir, BigBlueButton.logger)
 

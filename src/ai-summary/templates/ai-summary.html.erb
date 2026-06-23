@@ -78,7 +78,6 @@
       <div class="kpis" role="group" aria-label="Quick stats">
         <div class="kpi"><div class="label"><%= @strings["kpi_attendees"] %></div><div class="value"><%= (@attendees&.size || @attendee_count || 0) %></div></div>
         <div class="kpi"><div class="label"><%= @strings["kpi_transcript"] %></div><div class="value"><%= @transcript_format || @strings["transcript_format_labeled"] %></div></div>
-        <div class="kpi"><div class="label"><%= @strings["kpi_words"] %></div><div class="value"><%= @word_count || 0 %></div></div>
       </div>
       <div class="actions" style="margin-top:12px">
         <button class="btn" id="printBtn" type="button" title="<%= @strings["btn_print_title"] %>">
