@@ -152,7 +152,8 @@ end
 
 info "Chunks: #{chunks.size}"
 
-all_segments = []
+all_segments       = []
+detected_languages = []
 
 chunks.each_with_index do |chunk, i|
   info "Chunk #{i + 1}/#{chunks.size}: #{chunk[:from_ms]}ms – #{chunk[:to_ms]}ms"
@@ -173,6 +174,9 @@ chunks.each_with_index do |chunk, i|
 
   begin
     data = JSON.parse(File.read(whisper_out))
+    # whisper.cpp -oj reports the detected language (ISO code) under result.language.
+    lang = data.dig('result', 'language').to_s.strip
+    detected_languages << lang unless lang.empty? || lang == 'auto'
     segs = (data['transcription'] || []).filter_map do |s|
       text = s['text'].to_s.strip
       next if text.empty?
@@ -196,5 +200,12 @@ chunks.each_with_index do |chunk, i|
 end
 
 TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
-File.write(output_json, JSON.generate({ 'transcription' => all_segments }))
+
+out = { 'transcription' => all_segments }
+unless detected_languages.empty?
+  majority = detected_languages.tally.max_by { |_, c| c }&.first
+  out['language'] = majority if majority
+  info "Detected language: #{majority} (#{detected_languages.tally.inspect})"
+end
+File.write(output_json, JSON.generate(out))
 info "Written #{all_segments.size} segment(s) to #{File.basename(output_json)}"

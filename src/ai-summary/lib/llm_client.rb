@@ -97,10 +97,22 @@ module LLMClient
     end
 
     def summarize(text)
-      raise NotImplementedError, "Subclass must implement summarize method"
+      chat_completion(system: system_prompt, user: text)
+    end
+
+    # Run a completion with an explicit system prompt. Used for structured
+    # extraction (e.g. action items) that needs its own instructions rather than
+    # the meeting-summary system prompt.
+    def complete(user, system:)
+      chat_completion(system: system, user: user)
     end
 
     protected
+
+    # Subclasses perform one chat/messages call and return the text content.
+    def chat_completion(system:, user:)
+      raise NotImplementedError, "Subclass must implement chat_completion"
+    end
 
     # POSTs +request+ to +uri+ with explicit timeouts, retrying on transient
     # errors (429/5xx and connection/timeout errors) with exponential backoff.
@@ -140,7 +152,7 @@ module LLMClient
   end
 
   class DisabledClient < Base
-    def summarize(text)
+    def chat_completion(system:, user:)
       nil  # Return nil when disabled
     end
   end
@@ -159,7 +171,7 @@ module LLMClient
       end
     end
 
-    def summarize(text)
+    def chat_completion(system:, user:)
       model = @provider_config['model'] || DEFAULT_MODEL
       @logger.info("Claude model: #{model}")
       max_tokens = @provider_config['max_tokens'] || 1024
@@ -167,8 +179,8 @@ module LLMClient
         model: model,
         max_tokens: max_tokens,
         temperature: @provider_config['temperature'] || 0.7,
-        system: system_prompt,
-        messages: [{ role: 'user', content: text }]
+        system: system,
+        messages: [{ role: 'user', content: user }]
       }
 
       uri = URI(API_URL)
@@ -210,14 +222,14 @@ module LLMClient
       end
     end
 
-    def summarize(text)
+    def chat_completion(system:, user:)
       model = @provider_config['model'] || DEFAULT_MODEL
       @logger.info("OpenAI model: #{model}")
       body = {
         model: model,
         messages: [
-          { role: 'system', content: system_prompt },
-          { role: 'user', content: text }
+          { role: 'system', content: system },
+          { role: 'user', content: user }
         ]
       }
 
@@ -262,14 +274,14 @@ module LLMClient
       end
     end
 
-    def summarize(text)
+    def chat_completion(system:, user:)
       model = @provider_config['model'] || DEFAULT_MODEL
       @logger.info("Albert model: #{model}")
       body = {
         model: model,
         messages: [
-          { role: 'system', content: system_prompt },
-          { role: 'user', content: text }
+          { role: 'system', content: system },
+          { role: 'user', content: user }
         ]
       }
 

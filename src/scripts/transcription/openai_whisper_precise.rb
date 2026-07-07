@@ -26,22 +26,18 @@ events_xml = ARGV[2]
 if audio_file && events_xml && File.exist?(events_xml)
   events_doc = Nokogiri::XML(File.read(events_xml))
 
-  if ENV['WHISPER_PROMPT'].to_s.strip.empty?
-    speaker_name = TranscriptionUtils.speaker_name_for_audio(events_doc, audio_file)
-    if speaker_name
-      $stderr.puts "INFO : Speaker: #{speaker_name}"
-      ENV['WHISPER_PROMPT'] =
-        "Meeting participant #{speaker_name} speaking. " \
-        "This is their individual microphone audio from a meeting."
-    end
+  all_names = TranscriptionUtils.all_speaker_names(events_doc)
+
+  # Vocabulary priming with participant names (not instruction text) so Whisper
+  # spells names correctly without echoing meta-language into the transcript.
+  if ENV['WHISPER_PROMPT'].to_s.strip.empty? && !all_names.empty?
+    $stderr.puts "INFO : Vocabulary prompt: #{all_names.join(', ')}"
+    ENV['WHISPER_PROMPT'] = "Meeting participants: #{all_names.join(', ')}."
   end
 
-  if ENV['WHISPER_KNOWN_SPEAKER_NAMES'].to_s.strip.empty?
-    all_names = TranscriptionUtils.all_speaker_names(events_doc)
-    unless all_names.empty?
-      $stderr.puts "INFO : Known speakers: #{all_names.join(', ')}"
-      ENV['WHISPER_KNOWN_SPEAKER_NAMES'] = all_names.join(',')
-    end
+  if ENV['WHISPER_KNOWN_SPEAKER_NAMES'].to_s.strip.empty? && !all_names.empty?
+    $stderr.puts "INFO : Known speakers: #{all_names.join(', ')}"
+    ENV['WHISPER_KNOWN_SPEAKER_NAMES'] = all_names.join(',')
   end
 end
 
