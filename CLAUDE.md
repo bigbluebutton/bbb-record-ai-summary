@@ -4,331 +4,131 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This repository implements the **`ai-summary`** recording playback format for BigBlueButton (BBB). It plugs into the standard BBB recording pipeline and adds AI-powered features: audio transcription via whisper.cpp, speaker-labeled WebVTT output, LLM-generated meeting summaries, and action item extraction.
+This repository implements the **`ai-summary`** recording playback format for BigBlueButton (BBB). It plugs into the standard BBB recording pipeline and adds AI-powered features: audio transcription (cloud providers or local whisper.cpp fallback), speaker-labeled WebVTT output, LLM-generated meeting summaries, and action item extraction.
 
-Source code lives in `src/`. Shell scripts at the project root (`deploy.sh`, `deploy_transcription.sh`) copy everything to a production BBB server.
+Detailed docs live alongside this file — prefer updating them over duplicating content here:
+- **ARCHITECTURE.md** — pipeline diagram, component-by-component walkthrough, data formats
+- **DEVELOPMENT.md** — package build, source deployment table, advanced provider configuration
+- **OPERATIONS.md** — runtime config, reprocessing, logs, status checks
+- **INSTALLATION.md** — first-time server setup
 
-## Directory Structure
+## Commands
 
-```
-bbb-playback-ai/
-├── src/
-│   ├── ai-summary/                     # The ai-summary playback format
-│   │   ├── process/ai-summary.rb       # BBB process stage (all extractors inline)
-│   │   ├── publish/ai-summary.rb       # BBB publish stage
-│   │   ├── lib/llm_client.rb           # Multi-provider LLM abstraction
-│   │   ├── templates/
-│   │   │   ├── ai-summary.md.erb       # Markdown output template
-│   │   │   ├── ai-summary.html.erb     # HTML output template
-│   │   │   └── ai-summary.json.erb     # JSON output template
-│   │   └── ai-summary.yml              # Unified config: format + llm: + docs: sections
-│   └── scripts/
-│       ├── post_archive/
-│       │   └── transcribe_audio.rb     # Post-archive audio transcription hook
-│       ├── post_publish/
-│       │   └── publish_to_docs.rb      # Post-publish hook: publishes to La Suite Numérique Docs
-│       └── transcription/
-│           ├── openai_whisper.rb       # OpenAI Whisper API provider
-│           ├── albert_whisper.rb       # Albert (French gov) API provider
-│           ├── transcription_utils.rb  # Shared: audio chunking from events.xml talking cues
-│           ├── transcription.yml           # Default config (safe defaults, tracked in git)
-│           └── transcription-override.yml  # Local operator config with real credentials (gitignored)
-├── ai-summary-playback.nginx           # Nginx location block
-├── recording/                          # Test workspace (gitignored)
-├── logs/                               # Processing logs (gitignored)
-└── deploy.sh                           # Deploys to production BBB (requires root)
+```bash
+# Run the full pipeline (transcription → process → publish) on a test recording
+./dev/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --skip-llm
+./dev/run_pipeline.sh <tarball> --skip-transcription --skip-llm   # reuse bundled transcription.json
+./dev/run_pipeline.sh <tarball> --force-retranscribe --skip-llm   # wipe workspace + re-transcribe
+./dev/run_pipeline.sh --setup-only    # non-BBB machine: install shim BBB tree (sudo)
+
+# Run individual stages manually
+ruby src/ai-summary/process/ai-summary.rb -m <meeting_id>
+ruby src/ai-summary/publish/ai-summary.rb -m <meeting_id>-ai-summary
+ruby src/scripts/post_archive/transcribe_audio.rb -m <meeting_id>
+ruby src/scripts/transcription/openai_whisper.rb <audio.webm> <out.json> <events.xml>
+
+# Build / deploy
+./build.sh                    # dpkg-buildpackage; outputs ../bbb-record-ai-summary_*.deb
+./dch_version.sh              # prints Debian version derived from git tags
+./deploy.sh [--dry-run]       # deploy source to a BBB server (auto-elevates with sudo)
+./deploy.sh --install-whisper # additionally build/install local whisper.cpp fallback
 ```
 
-## Config Files
+There is no test suite or linter. The dev harness (`dev/run_pipeline.sh` + `dev/README.md`) is the way to verify changes end-to-end: it unpacks a raw-recording tarball into `recording/raw/`, runs all three stages, and (on a BBB server with HTTPS) publishes a web preview. On a BBB server it runs the source scripts in dev mode via `bundle exec`; on a non-BBB machine `--setup-only` creates `/usr/local/bigbluebutton/core/` with a shim library (`dev/lib/recordandplayback.rb`) and symlinks the scripts into it.
 
-There are exactly **two** config files for this project:
-
-### `ai-summary.yml` (unified config — tracked in git)
-Located at `src/ai-summary/ai-summary.yml` (dev) or `/usr/local/bigbluebutton/core/scripts/ai-summary.yml` (production). Contains three sections:
-
-- **Root keys** (`publish_dir`, `playback_dir`, `format`, `whisper_threads`, `include_chat_in_discussion`) — format/pipeline settings
-- **`llm:`** — LLM summarization (formerly `llm.yml`): provider selection, API keys, per-provider model config, system prompt
-- **`docs:`** — La Suite Numérique Docs integration (formerly `docs.yml`): enabled flag, host, Keycloak credentials
-
-The file is tracked in git with safe defaults (`llm.provider: disabled`, `docs.enabled: false`). Credentials are added either directly on the production server or via the `/etc/bigbluebutton/ai-summary.yml` override (see below).
-
-### `transcription.yml` (tracked in git, safe defaults)
-Located alongside `transcribe.rb` at `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml` (production) or `src/scripts/transcription/transcription.yml` (dev). Configures the active transcription backend. Add credentials via `transcription-override.yml` (gitignored) or `/etc/bigbluebutton/post-archive-transcription.yml` on the server.
-
-## Override Files (`/etc/bigbluebutton/`)
-
-Both config files support operator overrides placed in `/etc/bigbluebutton/`. The override is **deep-merged** so only keys present in the override are changed — nested sections not mentioned in the override are fully preserved.
-
-| Override file | Applies to |
-|---|---|
-| `/etc/bigbluebutton/ai-summary.yml` | `ai-summary.yml` (all sections: root, `llm:`, `docs:`) |
-| `/etc/bigbluebutton/post-archive-transcription.yml` | `transcription.yml` |
-
-Example: to enable Claude without touching any other setting:
-```yaml
-# /etc/bigbluebutton/ai-summary.yml
-llm:
-  provider: claude
-  anthropic_api_key: "sk-ant-..."
-```
+GitHub Actions builds the .deb on pushes/PRs to the `ai-summary-new-format` branch and attaches it to releases; `publish-tag.yml` is a manual workflow that bumps the version and cuts a tag.
 
 ## BBB Recording Pipeline Integration
 
-BBB processes recordings through: **Archive → Sanity → Process → Publish**
+BBB processes recordings through **Archive → Sanity → Process → Publish**. This project adds:
 
-This project adds:
-- A **post_archive hook** (after Archive): `transcribe_audio.rb` — transcribes all audio tracks
-- A **process stage**: `process/ai-summary.rb` — extracts and renders all meeting data
-- A **publish stage**: `publish/ai-summary.rb` — converts to PDF, finalizes metadata, copies to publish dir
-- A **post_publish hook** (optional): `publish_to_docs.rb` — publishes the AI summary to La Suite Numérique Docs
+- **post_archive hook** `src/scripts/post_archive/transcribe_audio.rb` — transcribes all audio tracks into `recording/raw/<meeting_id>/transcription/`
+- **process stage** `src/ai-summary/process/ai-summary.rb` — extracts meeting data, renders ERB templates, writes to `recording/process/ai-summary/<meeting_id>/`
+- **publish stage** `src/ai-summary/publish/ai-summary.rb` — converts to PDF, finalizes metadata, copies to `/var/bigbluebutton/published/ai-summary/<meeting_id>/`
+- **post_publish hook** (optional) `src/scripts/post_publish/publish_to_docs.rb` — publishes to La Suite Numérique Docs
 
-## Local Development
+See ARCHITECTURE.md for the wiring into `/etc/bigbluebutton/recording/recording.yml`.
 
-The process and publish scripts require the BBB core library at `/usr/local/bigbluebutton/core/lib/recordandplayback` (unconditional `require` at the top of each script). Development therefore assumes a BBB server or that library is installed locally.
+## Configuration
 
-### Config files that must be created for dev (not in repo)
+There are exactly **two** config files, both tracked in git with safe defaults, both supporting **deep-merged** operator overrides in `/etc/bigbluebutton/` (only keys present in the override change; nested sections not mentioned are preserved):
 
-**`src/bigbluebutton.yml`** — read by the process script in dev mode:
-```yaml
-recording_dir: /path/to/repo/recording
-log_dir: /path/to/repo/logs
-```
+| Config | Override | Contents |
+|---|---|---|
+| `src/ai-summary/ai-summary.yml` (deployed to `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`) | `/etc/bigbluebutton/ai-summary.yml` | Root format keys (`publish_dir`, `playback_dir`, `format`, `locale`, `include_chat_in_discussion`, `transcript_group_gap_seconds`), `llm:` section (provider, API keys, per-provider model config, system prompt, `language`), `docs:` section |
+| `src/scripts/transcription/transcription.yml` (deployed to `/usr/local/bigbluebutton/core/lib/transcription/transcription.yml`) | `/etc/bigbluebutton/post-archive-transcription.yml` | `transcriber_path` (string or array), per-provider `openai:` / `albert:` sections |
 
-**`src/config/bigbluebutton.yml`** — read by the post-archive transcription script in dev mode:
-```yaml
-recording_dir: /path/to/repo/recording
-log_dir: /path/to/repo/logs
-```
+Environment variables take priority over config file values for API keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ALBERT_API_KEY`.
 
-**`src/ai-summary.yml`** — read by the process script in dev mode (note: different from `src/ai-summary/ai-summary.yml`). Create as a symlink or copy of `src/ai-summary/ai-summary.yml` and adjust `playback_dir` to point to `src/ai-summary/templates/` so the ERB templates resolve locally.
-
-### Running scripts locally
-
-```bash
-# Run process stage (default meeting_id is a placeholder; use -m to override)
-ruby src/ai-summary/process/ai-summary.rb -m <meeting_id>
-
-# Run publish stage
-ruby src/ai-summary/publish/ai-summary.rb -m <meeting_id>-ai-summary
-
-# Run post-archive transcription
-ruby src/scripts/post_archive/transcribe_audio.rb -m <meeting_id>
-
-# Run a transcription provider directly
-ruby src/scripts/transcription/openai_whisper.rb <audio.webm> <out.json> <events.xml>
-```
-
-The test recording workspace is `recording/raw/<meeting_id>/` (gitignored). Delete `recording/raw/<meeting_id>/transcription/transcription.json` to force re-transcription.
-
-## Building the Debian Package
-
-```bash
-./build.sh                  # runs dpkg-buildpackage -us -uc -b; outputs ../bbb-record-ai-summary_*.deb
-./dch_version.sh            # prints DCH_VERSION=<debian-compatible version> derived from git tags
-```
-
-`dch_version.sh` converts semver git tags (e.g. `v1.2.0-rc.1`) to Debian version strings (e.g. `1.2.0~rc1`). It handles `alpha`, `beta`, and `rc` pre-release qualifiers and appends `.postN+gHASH` for untagged commits.
-
-The `debian/` directory uses standard debhelper. `debian/rules` installs all source files to the correct production paths. `debian/postinst`:
-- Creates `/var/bigbluebutton/published/ai-summary/`, log dir, and staging publish dir
-- Copies `transcription.yml` to its final location if it doesn't already exist
-- Both `openai_whisper.rb` and `albert_whisper.rb` are installed; the active one is selected via `transcriber_path` in `/etc/bigbluebutton/post-archive-transcription.yml`
-
-## Deployment
-
-```bash
-./deploy.sh                              # deploy to production BBB (requires root, auto-elevates with sudo)
-./deploy.sh --dry-run                    # preview without writing files
-./deploy_transcription.sh openai_whisper # deploy OpenAI Whisper transcription provider
-./deploy_transcription.sh albert_whisper # deploy Albert Whisper transcription provider
-./deploy_overrides.sh                    # deploy local override files to /etc/bigbluebutton/
-```
-
-`deploy_overrides.sh` copies `src/ai-summary/ai-summary-override.yml` → `/etc/bigbluebutton/ai-summary.yml` and `src/scripts/transcription/transcription-override.yml` → `/etc/bigbluebutton/post-archive-transcription.yml` (only if each source file exists). Use this to push local credential overrides to a dev/prod server without touching the tracked config files.
-
-After deployment, wire `ai-summary` into the pipeline:
-```bash
-BBB_YML=/etc/bigbluebutton/recording/recording.yml
-sudo yq e -i '.steps.captions += ["process:ai-summary"]' "$BBB_YML"
-sudo yq e -i '.steps["process:ai-summary"] = "publish:ai-summary"' "$BBB_YML"
-```
+Scripts read BBB core properties via `BigBlueButton.read_props` (the standard BBB mechanism), and the process script loads `ai-summary.yml` relative to its working directory — the dev harness generates the dev-mode copies (`src/bigbluebutton.yml`, `src/config/bigbluebutton.yml`, `src/ai-summary.yml`) automatically on first run.
 
 ## Process Stage (`src/ai-summary/process/ai-summary.rb`)
 
-**Input:** `recording/raw/<meeting_id>/`
-**Output:** `recording/process/ai-summary/<meeting_id>/`
-
-Key operations:
-1. Loads config (dev or production path, see Config Loading below)
-2. Copies original notes PDF to process dir
-3. Runs all extractors (defined inline in this file under the `Extractors` module)
-4. Renders `ai-summary.md` and `ai-summary.html` from ERB templates
-5. Builds `metadata.xml` with `state="processed"`
-6. Creates `.done` status file in `recording/status/processed/`
-
-**Output files:** `ai-summary.pdf`, `ai-summary.md`, `ai-summary.html`, `transcript.txt`, `transcript_diarized.vtt`, `summary.txt`, `action_items.json`, `metadata.xml`
-
-### Extractor System
-
-All extractors are defined **inline in `process/ai-summary.rb`** under the `Extractors` module. There are no separate extractor files.
+All extractors are defined **inline in this file** under the `Extractors` module — there are no separate extractor files:
 
 | Extractor | Description |
 |---|---|
-| `AttendeesExtractor` | Unique participant names from `ParticipantJoinEvent` in events.xml |
-| `NotesExtractor` | Shared notes HTML from `notes/notes.html`; counts words |
-| `PollsExtractor` | Poll data from `PollPublishedRecordEvent` in events.xml |
+| `AttendeesExtractor` | Unique participant names from `ParticipantJoinEvent` |
+| `NotesExtractor` | Shared notes from `notes/notes.html`; returns `{plain_text:, html:}` with sanitized CSS |
+| `PollsExtractor` | Published polls from `PollPublishedRecordEvent`, plus reconstruction of started-but-never-published polls from `PollStartedRecordEvent` + `UserRespondedToPollRecordEvent` |
+| `EventsExtractor` | Recording-on intervals from `RecordStatusEvent` pairs |
 | `TranscriptExtractor` | Reads pre-computed `transcription.json`; generates WebVTT and plain text |
-| `SummaryExtractor` | LLM-generated summary from notes + transcript; accepts optional `prompt_addition:` to append extra instructions to the system prompt |
-| `ActionItemsExtractor` | LLM-extracted action items as `[{owner:, label:, status:}]`; accepts `prompt_addition:`, with a hard JSON-only override at end of prompt to guard structured output |
-| `ChatExtractor` | Chat messages from `GroupChatMessageBroadcastEvent`/`PublicChatEvent` in events.xml |
+| `SummaryExtractor` | LLM summary from notes + transcript; accepts `prompt_addition:` |
+| `ActionItemsExtractor` | LLM-extracted action items `[{owner:, label:, status:}]`; `prompt_addition:` plus a hard JSON-only override at the end of the prompt |
+| `ChatExtractor` | Chat messages from `GroupChatMessageBroadcastEvent`/`PublicChatEvent` |
 
-### TranscriptExtractor
+`TranscriptExtractor` maps audio tracks to speakers via `AudioTrackPublishedEvent` (falls back to `"Unknown Speaker"`), uses `BigBlueButton::Events.first_event_timestamp` as recording start, and merges segments into cues split on speaker change, `MAX_CUE_CHARS = 200`, or `MAX_CUE_DURATION_MS = 15_000`. `diarize_provider_transcriptions` applies the same pipeline to every `transcription_<name>.json` and writes `transcript_diarized_<name>.json`.
 
-Reads `raw/<meeting_id>/transcription/transcription.json` (canonical first-provider output). Logs the `"provider"` field if present. Does **not** invoke whisper directly.
+**Templates** (`src/ai-summary/templates/`): `ai-summary.md.erb`, `ai-summary.html.erb`, `ai-summary.json.erb`. All UI strings come from `templates/locales/<locale>.json` (`en`, `fr`, `pt`), selected by the `locale:` config key (falls back to `en`) and exposed to templates as `@strings`. The template path resolves from `playback_dir` (production: `/usr/local/bigbluebutton/core/playback/ai-summary/`).
 
-- `build_segments_from_tracks` (private) — maps tracks to speakers via `AudioTrackPublishedEvent`, returns flat sorted segment list; falls back to `"Unknown Speaker"` if no speaker mapping found
-- Uses `BigBlueButton::Events.first_event_timestamp(events_doc)` as the recording start time
-- `create_transcription_cues` merges segments into cues, splitting on speaker change or when cue exceeds `MAX_CUE_CHARS = 200` or `MAX_CUE_DURATION_MS = 15_000`
-- `diarize_provider_transcriptions` (public) — called after `extract`; finds all `transcription_<name>.json` in the raw transcription dir, applies the same pipeline to each, writes `transcript_diarized_<name>.json` to the process dir
-
-### Template Variables
-
-**`ai-summary.md.erb`**: `@notes_content`, `@word_count`, `@attendees`, `@polls`, `@transcript_diarized` (array of cue hashes), `@transcript` (plain text), `@summary`
-
-**`ai-summary.html.erb`**: `@title`, `@subtitle`, `@attendees`, `@attendee_count`, `@word_count`, `@transcript` (array of cue hashes), `@transcript_format`, `@transcript_title`, `@transcript_open`, `@timestamps_note`, `@shared_notes` (HTML), `@summary`, `@key_points`, `@action_items`, `@footer`
-
-Template path is resolved from `playback_dir` in `ai-summary.yml` (production: `/usr/local/bigbluebutton/core/playback/ai-summary/`).
+**Process dir output:** `ai-summary.md`, `ai-summary.html`, `transcript.txt`, `transcript_diarized.vtt`, `transcript_diarized.json`, `summary.txt`, `action_items.json`, `metadata.xml` (state="processed"), plus per-provider `transcript_diarized_<name>.json`.
 
 ## Publish Stage (`src/ai-summary/publish/ai-summary.rb`)
 
-**Input:** `recording/process/ai-summary/<meeting_id>/`
-**Output:** `recording/publish/ai-summary/<meeting_id>/` → `$publish_dir/<meeting_id>/`
+1. Strips the format suffix via `delete_suffix("-ai-summary")` — **not** a last-hyphen split, because the format name itself contains a hyphen
+2. Converts `ai-summary.md` to PDF with `pandoc --pdf-engine=xelatex`
+3. **Renames on publish**: `transcript_diarized.vtt` → `transcription.vtt`, `transcript_diarized.json` → `transcription.json`; per-provider `transcript_diarized_<name>.json` → `transcription_<name>.json`
+4. Updates `metadata.xml` with `state="published"`, playback link, duration, and a `<url>` entry per published transcription file
+5. Cleans up process/publish staging dirs; writes `.done`/`.fail` to `recording/status/published/`
 
-Key operations:
-1. Parses meeting ID: strips `-ai-summary` suffix via `delete_suffix` (not a simple last-hyphen split, because the format name contains a hyphen)
-2. Early exit if format is not `ai-summary`
-3. Converts `ai-summary.md` to PDF with `pandoc --pdf-engine=xelatex` (falls back to original PDF)
-4. Calls `copy_provider_transcriptions` — globs `transcript_diarized_<name>.json` from process dir, copies each as `transcription_<name>.json` to the publish target
-5. Updates `metadata.xml` with `state="published"`, playback link, duration, and a `<url>` entry per provider transcription file
-6. Copies files to final publish dir (`/var/bigbluebutton/published/ai-summary/<meeting_id>/`)
-7. Cleans up process and publish staging dirs
-8. Creates `.done` or `.fail` status file in `recording/status/published/`
+## Transcription System
 
-## Post-Archive Stage (`src/scripts/post_archive/transcribe_audio.rb`)
+`transcribe_audio.rb` exits early if `transcription.json` already exists (delete it to re-run). `transcriber_path` accepts a string or array; each provider runs over all audio tracks and writes `transcription_<name>.json`. The **first** provider's merged output is also written as the canonical `transcription.json` consumed by the process stage. When no provider is configured or available, it falls back to the bundled `whisper_cpp.rb` (binary/model auto-located; override with `WHISPER_BINARY`/`WHISPER_MODEL`).
 
-**Trigger:** Registered as a BBB post_archive hook, runs after Archive stage
-**Output:** `recording/raw/<meeting_id>/transcription/`
-
-`transcriber_path` in `transcription.yml` accepts a single string or an array. Key helpers:
-- `normalize_transcriber_paths(raw)` — coerces to `[{path:, name:}]`, strips `.rb` for the name, deduplicates by name (first wins), skips `"disabled"`
-- `resolve_active_backends(providers, logger)` — probes each path; falls back to `WhisperBackend` when no custom providers are configured
-- `transcribe_audio_files(backend, ...)` — per-audio retry loop, returns `[{file:, segments:, ok:, language:}]`
-- `run_provider_transcription(provider, ...)` — runs one provider end-to-end; writes `transcription_<name>.json`; writes canonical `transcription.json` for the first provider only (signalled via `canonical_path` argument)
-
-If `transcription.json` already exists, the script exits early (delete it to re-run).
-
-### Transcription Provider Interface
-
-Both `openai_whisper.rb` and `albert_whisper.rb` are called as:
+Every provider script implements the same CLI contract:
 ```
 <provider_script> <audio_file> <output_json_file> <events_xml_file>
 ```
 
-Both share `transcription_utils.rb` (same directory) for chunk preparation:
-- Converts audio to 16 kHz mono WAV via ffmpeg
-- Extracts `ParticipantTalkingEvent` cues from `events.xml` to find speech intervals
-- Falls back to `AudioTrackPublished/Unpublished` floor intervals if no talking events
-- Merges cues with gap ≤ `MERGE_GAP_MS = 2000ms`, then cuts one WAV chunk per merged cue
-- Returns `{ work_file:, temp_wav:, chunks_dir:, chunks: [{path:, from_ms:, to_ms:}] }`
-
-**Albert provider** (`albert_whisper.rb`): reads language from `meta_recording-transcription-language` in `metadata.xml` (adjacent to events.xml), then from `transcription.yml`, then env. Supports optional Voice Activity Detection (VAD via `node-vad`) to skip silent chunks; short transcriptions (≤ 3 words) trigger a forced VAD re-check to filter hallucinations. Config nested under `albert:` key in `transcription.yml`.
-
-**OpenAI provider** (`openai_whisper.rb`): enforces 25 MB per-chunk limit; filters segments using a quality score derived from `no_speech_prob` and `compression_ratio` (threshold 0.4); uses `verbose_json` response format with segment-level timestamps. Config nested under `openai:` key in `transcription.yml`.
-
-Raw output format (per provider file, includes `"provider"` field):
-```json
-{ "meeting_id": "...", "generated_at": "...", "provider": "openai_whisper", "tracks": [
-  { "file": "audio_basename.webm", "segments": [
-    { "offsets": { "from": 1200, "to": 4800 }, "text": "Hello." }
-  ]}
-]}
-```
+Providers in `src/scripts/transcription/`:
+- `openai_whisper.rb` — OpenAI Whisper API; 25 MB chunk limit; segment quality filter from `no_speech_prob`/`compression_ratio`
+- `albert_whisper.rb` — Albert (French gov) API; language from `meta_recording-transcription-language` metadata → config → env; optional VAD via `node-vad`, with forced VAD re-check on suspiciously short transcriptions
+- `whisper_cpp.rb` — local whisper.cpp fallback
+- `openai_whisper_{main,precise,inclusive,contextual,multilingual}.rb` — **scenario wrappers**: each sets `WHISPER_*`/`OPENAI_*` env-var presets tuned for a use case (already-set env vars win), then `load`s `openai_whisper.rb`
+- `transcription_utils.rb` — shared chunking: ffmpeg → 16 kHz mono WAV, speech intervals from `ParticipantTalkingEvent` cues (fallback: audio-track floor intervals), merges cues with gap ≤ 2000 ms, cuts one WAV chunk per merged cue
 
 ## LLM Client (`src/ai-summary/lib/llm_client.rb`)
 
-Factory pattern: `LLMClient::Base.create(logger, language: nil, prompt_addition: nil)` returns the right client. `prompt_addition` is stored as `@prompt_addition` on the base class and appended to the system prompt; sourced from the `bbb-ai-summary-prompt-addition` meeting metadata key.
+Factory: `LLMClient::Base.create(logger, language: nil, prompt_addition: nil)` returns `ClaudeClient`, `OpenAIClient`, `AlbertClient`, or `DisabledClient` (no-op) based on `llm.provider`. `prompt_addition` is appended to the system prompt and is sourced from the `bbb-ai-summary-prompt-addition` meeting metadata key. `llm.language` forces the summary output language; unset means auto-detect.
 
-| Class | Provider |
-|---|---|
-| `ClaudeClient` | Anthropic API, default model `claude-3-5-sonnet-20241022` |
-| `OpenAIClient` | OpenAI API, default model `gpt-4o-mini` |
-| `AlbertClient` | Albert (French government) API |
-| `DisabledClient` | No-op, returns nil |
-
-**LLM summarization is production-only** — the client raises an error when `__dir__` is outside `/usr/local/bigbluebutton/core`. Config is read from the `llm:` section of `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`.
-
-Environment variables take priority over config file values:
-- `ANTHROPIC_API_KEY` for Claude
-- `OPENAI_API_KEY` for OpenAI
-- `ALBERT_API_KEY` for Albert
-
-## Config Loading
-
-### Process script (`process/ai-summary.rb`)
-- **Production** (`__dir__` starts with `/usr/local/bigbluebutton/core/scripts`): reads `bigbluebutton.yml` and `ai-summary.yml` from that dir
-- **Development**: reads `src/bigbluebutton.yml` and `src/ai-summary.yml` from project root
-
-### Publish script (`publish/ai-summary.rb`)
-- **Always** reads `bigbluebutton.yml` from `/usr/local/bigbluebutton/core/scripts/` (no dev fallback for BBB props)
-- **Development**: reads format config from `src/ai-summary/ai-summary.yml`
-
-### LLM client (`llm_client.rb`)
-- Reads the `llm:` section from `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`
-- Production-only: raises if `__dir__` is outside `/usr/local/bigbluebutton/core`
-
-### Post-publish script (`publish_to_docs.rb`)
-- Reads the `docs:` section from `/usr/local/bigbluebutton/core/scripts/ai-summary.yml`
-
-### Post-archive script (`transcribe_audio.rb`)
-- **Production**: reads from `/etc/bigbluebutton/recording/recording.yml`
-- **Development**: reads from `src/config/bigbluebutton.yml` (relative to `src/scripts/post_archive/`)
+**Production-only**: the client raises when `__dir__` is outside `/usr/local/bigbluebutton/core` — the dev harness satisfies this by symlinking `llm_client.rb` under the BBB core tree.
 
 ## Key Implementation Details
 
-### Meeting ID Format
-- Process script receives: `<meeting_id>` (e.g., `1b30d714...-1760738236204`)
-- Publish script receives: `<meeting_id>-ai-summary` — strips suffix with `delete_suffix("-ai-summary")`
-
-### Status Files
-- Processed: `recording/status/processed/<meeting_id>-ai-summary.done`
-- Published: `recording/status/published/<meeting_id>-ai-summary.done` or `.fail`
-
-### BBB Library Utilities
-Scripts use the system library at `/usr/local/bigbluebutton/core/lib/recordandplayback`:
-- `BigBlueButton.logger`
-- `BigBlueButton::Events.get_recording_length(doc)`
-- `BigBlueButton::Events.get_meeting_metadata(path)`
-- `BigBlueButton::Events.get_num_participants(doc)`
-- `BigBlueButton::Events.first_event_timestamp(doc)`
-- `BigBlueButton.add_raw_size_to_metadata(dir, raw_dir)`
-- `BigBlueButton.add_playback_size_to_metadata(dir)`
-
-### Dependencies
-- **System**: whisper.cpp, ffmpeg, pandoc, texlive-latex
-- **Ruby gems**: `optimist`, `builder`, `nokogiri`, `anthropic` (optional), `openai` (optional)
+- Process script receives `<meeting_id>`; publish script receives `<meeting_id>-ai-summary`
+- Status files: `recording/status/processed/<meeting_id>-ai-summary.done`, `recording/status/published/<meeting_id>-ai-summary.done|.fail`
+- Scripts require the BBB core library `/usr/local/bigbluebutton/core/lib/recordandplayback` (real on a BBB server, shim from `dev/lib/` otherwise)
+- Dependencies — system: ffmpeg, pandoc, texlive-xetex, optionally whisper.cpp and node + node-vad; gems: `optimist`, `builder`, `nokogiri`, plus optional `anthropic`/`openai`
 
 ## Logging
 
 ```bash
-# Post-archive transcription
-tail -f /var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log
-
-# Process stage
-tail -f /var/log/bigbluebutton/ai-summary/process-<meeting_id>.log
-
-# Publish stage
-tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log
+tail -f /var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log   # transcription
+tail -f /var/log/bigbluebutton/ai-summary/process-<meeting_id>.log        # process
+tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log        # publish
 ```
+
+Dev harness logs go to `logs/ai-summary/` in the project root.
 
 ## Pull Request Format
 
