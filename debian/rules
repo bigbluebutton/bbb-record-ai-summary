@@ -32,6 +32,18 @@ override_dh_auto_install:
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper.rb
 	install -m 755 src/scripts/transcription/albert_whisper.rb \
 		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb
+	install -m 755 src/scripts/transcription/whisper_cpp.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/whisper_cpp.rb
+	install -m 755 src/scripts/transcription/openai_whisper_main.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper_main.rb
+	install -m 755 src/scripts/transcription/openai_whisper_precise.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper_precise.rb
+	install -m 755 src/scripts/transcription/openai_whisper_inclusive.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper_inclusive.rb
+	install -m 755 src/scripts/transcription/openai_whisper_contextual.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper_contextual.rb
+	install -m 755 src/scripts/transcription/openai_whisper_multilingual.rb \
+		debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/transcription/openai_whisper_multilingual.rb
 
 	# LLM library
 	install -d debian/bbb-record-ai-summary/usr/local/bigbluebutton/core/lib/ai-summary

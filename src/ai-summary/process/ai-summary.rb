@@ -330,6 +330,11 @@ module Extractors
     end
   end
   class NotesExtractor
+    # Elements that can execute script or exfiltrate data when the notes HTML
+    # is embedded in the published report.
+    DANGEROUS_ELEMENTS = %w[script iframe frame frameset object embed form base meta link applet].freeze
+    URI_ATTRIBUTES     = %w[href src action formaction xlink:href].freeze
+
     def extract(raw_archive_dir, html_to_plain_text_method, logger)
       notes_html_file = "#{raw_archive_dir}/notes/notes.html"
 
@@ -343,13 +348,43 @@ module Extractors
 
       return nil if text_content.strip.empty?
 
-      sanitized_html = html_content.gsub(/<style([^>]*)>(.*?)<\/style>/im) do
+      sanitized_html = sanitize_html(html_content)
+      sanitized_html = sanitized_html.gsub(/<style([^>]*)>(.*?)<\/style>/im) do
         attrs = Regexp.last_match(1)
         css   = Regexp.last_match(2)
         css   = css.gsub(/\b(?:html|body)\s*\{[^}]*\}/i, '')
         css.strip.empty? ? '' : "<style#{attrs}>#{css}</style>"
       end
       { plain_text: text_content, html: sanitized_html }
+    end
+
+    private
+
+    # The notes HTML keeps its markup (it is embedded raw in the report), but
+    # script-capable elements, event-handler attributes, and script-scheme URLs
+    # are removed. data: URLs are allowed for images only.
+    def sanitize_html(html_content)
+      doc = Nokogiri::HTML(html_content)
+      doc.css(DANGEROUS_ELEMENTS.join(',')).each(&:remove)
+
+      doc.traverse do |node|
+        next unless node.element?
+
+        node.attribute_nodes.each do |attr|
+          name = attr.name.downcase
+          if name.start_with?('on')
+            node.remove_attribute(attr.name)
+          elsif URI_ATTRIBUTES.include?(name)
+            value = attr.value.to_s.gsub(/[[:space:]]/, '').downcase
+            if value.start_with?('javascript:', 'vbscript:') ||
+               (value.start_with?('data:') && !value.start_with?('data:image/'))
+              node.remove_attribute(attr.name)
+            end
+          end
+        end
+      end
+
+      doc.to_html
     end
   end
 
@@ -1161,6 +1196,13 @@ def format_localized_date(time, locale_strings)
   time.strftime(fmt.gsub('{month}', month))
 end
 
+# HTML-escape helper available inside the ERB templates. Plain ERB does not
+# escape <%= %>, so any user-controlled value rendered in ai-summary.html.erb
+# must go through h().
+def h(text)
+  ERB::Util.html_escape(text)
+end
+
 # Helper method to render markdown using ERB template
 def render_markdown_into_template(template_path, data)
   template_content = File.read(template_path, encoding: 'utf-8')
@@ -1185,6 +1227,19 @@ def extract_meta_prompt_addition(raw_archive_dir)
   meeting_metadata['bbb-ai-summary-prompt-addition'].to_s
 end
 
+# Meeting metadata gets copied into metadata.xml, which is served publicly with
+# the published recording. Keys carrying credentials (e.g. the La Suite Docs
+# access token) or internal prompt instructions must never be published.
+SENSITIVE_META_KEY_PATTERN = /token|secret|password|api[-_]?key/i
+EXCLUDED_META_KEYS = %w[bbb-ai-summary-prompt-addition].freeze
+
+def publishable_meeting_metadata(raw_archive_dir)
+  BigBlueButton::Events.get_meeting_metadata("#{raw_archive_dir}/events.xml").reject do |key, _value|
+    k = key.to_s
+    EXCLUDED_META_KEYS.include?(k) || k.match?(SENSITIVE_META_KEY_PATTERN)
+  end
+end
+
 # Helper method to build complete metadata XML
 def build_metadata_xml(meeting_id, events_doc, raw_archive_dir)
   # Extract timing information
@@ -1206,7 +1261,7 @@ def build_metadata_xml(meeting_id, events_doc, raw_archive_dir)
     builder.participants(BigBlueButton::Events.get_num_participants(events_doc))
     builder.playback
     builder.meta {
-      BigBlueButton::Events.get_meeting_metadata("#{raw_archive_dir}/events.xml").each { |k,v|
+      publishable_meeting_metadata(raw_archive_dir).each { |k,v|
         builder.method_missing(k, v)
       }
     }
@@ -1273,11 +1328,20 @@ playback_dir = format_props['playback_dir']
 
 
 # Main processing logic
+done_file = "#{recording_dir}/status/processed/#{meeting_id}-ai-summary.done"
+
+# A process dir without a .done status file means a previous run crashed partway
+# through. Remove the stale output so this run reprocesses from scratch instead
+# of taking the already-processed branch and marking incomplete output as done.
+stale_process_dir = FileTest.directory?(target_dir) && !File.exist?(done_file)
+FileUtils.rm_rf(target_dir) if stale_process_dir
+
 unless FileTest.directory?(target_dir)
   FileUtils.mkdir_p "#{log_dir}/ai-summary"
   logger = Logger.new("#{log_dir}/ai-summary/process-#{meeting_id}.log", 'daily')
   BigBlueButton.logger = logger
   BigBlueButton.logger.info("Processing script ai-summary.rb")
+  BigBlueButton.logger.warn("Removed stale process dir from a previous incomplete run: #{target_dir}") if stale_process_dir
   FileUtils.mkdir_p target_dir
   prompt_addition = extract_meta_prompt_addition(raw_archive_dir)
 
@@ -1473,7 +1537,7 @@ unless FileTest.directory?(target_dir)
     BigBlueButton.logger.info("Created metadata.xml with state=processed and timing info")
 
     # Write status file
-    File.write("#{recording_dir}/status/processed/#{meeting_id}-ai-summary.done", "Processed #{meeting_id}")
+    File.write(done_file, "Processed #{meeting_id}")
 
   rescue Exception => e
     BigBlueButton.logger.error(e.message)
@@ -1483,5 +1547,5 @@ unless FileTest.directory?(target_dir)
     exit 1
   end
 else
-  File.write("#{recording_dir}/status/processed/#{meeting_id}-ai-summary.done", "Processed #{meeting_id}")
+  File.write(done_file, "Processed #{meeting_id}")
 end

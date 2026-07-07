@@ -139,8 +139,9 @@ end
 
 # Backend: custom transcribe.rb script
 class CustomScriptBackend
-  def initialize(custom_path)
+  def initialize(custom_path, output_log: nil)
     @script = custom_path
+    @output_log = output_log
   end
 
   def available?
@@ -153,8 +154,11 @@ class CustomScriptBackend
 
   def transcribe(audio_file, output_json, events_xml, timeout_seconds: nil)
     BigBlueButton.logger.info("Running #{File.basename(@script)}: #{File.basename(audio_file)}")
+    # Append provider stdout/stderr to the transcription log so API errors and
+    # per-chunk diagnostics are not lost.
+    output_redirect = @output_log ? [@output_log, 'a'] : '/dev/null'
     ok = run_process_with_timeout(timeout_seconds, @script, audio_file, output_json, events_xml,
-                                  [:out, :err] => '/dev/null')
+                                  [:out, :err] => output_redirect)
 
     if ok && File.exist?(output_json)
       BigBlueButton.logger.info("  -> #{File.basename(output_json)}")
@@ -276,10 +280,10 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
   threads.map(&:value)
 end
 
-def resolve_active_backends(providers)
+def resolve_active_backends(providers, output_log: nil)
   if providers.any?
     active = providers.each_with_object([]) do |p, result|
-      candidate = CustomScriptBackend.new(p[:path])
+      candidate = CustomScriptBackend.new(p[:path], output_log: output_log)
       if candidate.available?
         result << { name: p[:name], backend: candidate }
       else
@@ -301,7 +305,7 @@ def resolve_active_backends(providers)
       File.expand_path('../../transcription/whisper_cpp.rb', __dir__)
     end
 
-    candidate = CustomScriptBackend.new(whisper_script)
+    candidate = CustomScriptBackend.new(whisper_script, output_log: output_log)
     unless candidate.available?
       BigBlueButton.logger.error("whisper_cpp.rb not found or not executable at #{whisper_script}")
       BigBlueButton.logger.error("Install whisper.cpp or configure transcriber_path in transcription.yml")
@@ -438,7 +442,7 @@ end
 BigBlueButton.logger.info("Found #{audio_files.size} audio file(s)")
 
 providers       = get_normalized_transcriber_paths(transcription_props['transcriber_path'])
-active_backends = resolve_active_backends(providers)
+active_backends = resolve_active_backends(providers, output_log: log_path)
 
 BigBlueButton.logger.info("Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
 

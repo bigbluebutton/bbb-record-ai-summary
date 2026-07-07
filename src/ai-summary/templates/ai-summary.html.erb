@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title><%= @title || @strings["page_title_fallback"] %></title>
-  <meta name="description" content="<%= @description || @strings["page_description"] %>" />
+  <title><%= h(@title || @strings["page_title_fallback"]) %></title>
+  <meta name="description" content="<%= h(@description || @strings["page_description"]) %>" />
   <style>
     :root {
       --bg: #1a1b26;
@@ -73,8 +73,8 @@
 <body>
   <div class="container">
     <header class="hero" role="banner">
-      <h1 style="margin:0 0 6px"><%= @title || @strings["heading_fallback"] %></h1>
-      <p class="muted" style="margin:0"><%= @subtitle || @strings["html_subtitle_fallback"] %></p>
+      <h1 style="margin:0 0 6px"><%= h(@title || @strings["heading_fallback"]) %></h1>
+      <p class="muted" style="margin:0"><%= h(@subtitle || @strings["html_subtitle_fallback"]) %></p>
       <div class="kpis" role="group" aria-label="Quick stats">
         <div class="kpi"><div class="label"><%= @strings["kpi_attendees"] %></div><div class="value"><%= (@attendees&.size || @attendee_count || 0) %></div></div>
         <div class="kpi"><div class="label"><%= @strings["kpi_transcript"] %></div><div class="value"><%= @transcript_format || @strings["transcript_format_labeled"] %></div></div>
@@ -131,7 +131,7 @@
       <% if @attendees && !@attendees.empty? %>
         <ul class="attendees">
           <% @attendees.each do |name| %>
-            <li><%= name %></li>
+            <li><%= h(name) %></li>
           <% end %>
         </ul>
       <% else %>
@@ -146,10 +146,10 @@
         <button class="copy-btn" type="button" onclick="copySection('polls', this)" title="<%= @strings['btn_copy'] || 'Copy' %>" aria-label="<%= @strings['btn_copy'] || 'Copy' %>"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></button>
       </div>
       <% @polls.each_with_index do |poll, idx| %>
-        <h3 style="margin:.6em 0 .3em"><%= @strings["poll_prefix"] %> <%= idx + 1 %><% if poll[:question] && !poll[:question].empty? %>: <%= poll[:question] %><% end %></h3>
+        <h3 style="margin:.6em 0 .3em"><%= @strings["poll_prefix"] %> <%= idx + 1 %><% if poll[:question] && !poll[:question].empty? %>: <%= h(poll[:question]) %><% end %></h3>
         <ul>
           <% (poll[:answers] || []).each do |answer| %>
-            <li><strong><%= answer[:text] %></strong> — <%= answer[:votes] %> <%= answer[:votes] == 1 ? @strings["vote_singular"] : @strings["vote_plural"] %></li>
+            <li><strong><%= h(answer[:text]) %></strong> — <%= answer[:votes] %> <%= answer[:votes] == 1 ? @strings["vote_singular"] : @strings["vote_plural"] %></li>
           <% end %>
         </ul>
       <% end %>
@@ -191,7 +191,7 @@
         <% if @summary_html && !@summary_html.empty? %>
           <%= @summary_html %>
         <% else %>
-          <div style="white-space: pre-wrap;"><%= @summary %></div>
+          <div style="white-space: pre-wrap;"><%= h(@summary) %></div>
         <% end %>
       </section>
     <% end %>
@@ -205,19 +205,19 @@
         <ul>
           <% @action_items.each do |ai| %>
             <% klass = ai[:status] == :ok ? 'ok' : (ai[:status] == :warn ? 'warn' : '') %>
-            <li><span class="pill <%= klass %>"><%= @strings["action_item_owner"] %> <%= ai[:owner] %></span> <%= ai[:label] %></li>
+            <li><span class="pill <%= klass %>"><%= @strings["action_item_owner"] %> <%= h(ai[:owner]) %></span> <%= h(ai[:label]) %></li>
           <% end %>
         </ul>
       </section>
     <% end %>
 
     <footer>
-      <p><%= @footer || @strings["footer_fallback"] %></p>
+      <p><%= h(@footer || @strings["footer_fallback"]) %></p>
     </footer>
   </div>
 
   <script>
-    const I18N = <%= { lightMode: @strings["btn_light_mode"], darkMode: @strings["btn_dark_mode"], chatTag: @strings["chat_tag"], copy: (@strings["btn_copy"] || 'Copy'), copyDone: (@strings["btn_copy_done"] || 'Copied!') }.to_json %>;
+    const I18N = <%= { lightMode: @strings["btn_light_mode"], darkMode: @strings["btn_dark_mode"], chatTag: @strings["chat_tag"], copy: (@strings["btn_copy"] || 'Copy'), copyDone: (@strings["btn_copy_done"] || 'Copied!') }.to_json.gsub('</', '<\/') %>;
 
     // Theme toggle
     (function() {
@@ -314,10 +314,10 @@
       lines.join("\n")
     }.join("\n\n") -%>
     const COPY_DATA = {
-      attendees:   <%= (@attendees || []).map { |name| "- #{name};" }.join("\n").to_json %>,
-      polls:       <%= polls_text.to_json %>,
-      summary:     <%= (@summary || '').to_json %>,
-      actionItems: <%= (@action_items || []).map { |ai| "#{ai[:owner]}: #{ai[:label]}" }.join("\n").to_json %>
+      attendees:   <%= (@attendees || []).map { |name| "- #{name};" }.join("\n").to_json.gsub('</', '<\/') %>,
+      polls:       <%= polls_text.to_json.gsub('</', '<\/') %>,
+      summary:     <%= (@summary || '').to_json.gsub('</', '<\/') %>,
+      actionItems: <%= (@action_items || []).map { |ai| "#{ai[:owner]}: #{ai[:label]}" }.join("\n").to_json.gsub('</', '<\/') %>
     };
 
     const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>';
