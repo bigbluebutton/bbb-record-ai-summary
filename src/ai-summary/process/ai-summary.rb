@@ -1362,9 +1362,13 @@ unless FileTest.directory?(target_dir)
 
     Extractors::TranscriptExtractor.diarize_provider_transcriptions(raw_archive_dir, target_dir, BigBlueButton.logger, events_doc)
 
-    if transcript.nil?
-      BigBlueButton.logger.error("No transcription available for #{meeting_id}. Run post_archive/transcribe_audio.rb first.")
-      exit 1
+    # A missing transcript is no longer fatal: the recording may still have
+    # shared notes, polls, or chat worth publishing. Degrade gracefully and only
+    # bail out later if there is genuinely nothing to show.
+    transcript_missing = transcript.nil?
+    if transcript_missing
+      BigBlueButton.logger.warn("No transcription available for #{meeting_id}. " \
+                                "Rendering report without a transcript section.")
     end
 
     polls = Extractors::PollsExtractor.extract(events_doc, BigBlueButton.logger)
@@ -1399,6 +1403,17 @@ unless FileTest.directory?(target_dir)
     else
       BigBlueButton.logger.warn("Skipping chat extraction: could not determine recording_start_ms")
       []
+    end
+
+    # Bail out only when there is literally nothing to publish — no transcript,
+    # no notes, no polls, and no chat. Otherwise render whatever is available.
+    has_any_content = !transcript_missing ||
+                      (notes_plain_text && !notes_plain_text.strip.empty?) ||
+                      (polls && !polls.empty?) ||
+                      !chat_messages.empty?
+    unless has_any_content
+      BigBlueButton.logger.error("Nothing to publish for #{meeting_id}: no transcript, notes, polls, or chat.")
+      exit 1
     end
 
     summary = Extractors::SummaryExtractor.extract(
@@ -1503,6 +1518,7 @@ unless FileTest.directory?(target_dir)
       action_items: action_items,
       has_transcript: !transcript_cues.empty?,
       has_chat: !chat_messages.empty?,
+      transcript_missing: transcript_missing,
       include_chat: include_chat_in_discussion,
       transcript_provider: transcript_provider,
       transcript_cues_json: transcript_cues.map { |c|

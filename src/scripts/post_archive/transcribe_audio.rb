@@ -369,19 +369,32 @@ def run_provider_transcription(provider, audio_files, transcription_dir, events_
   merged['metadata'] = { 'config' => provider_config, 'quality_metrics' => provider_metrics }.compact
   merged.delete('metadata') if merged['metadata'].empty?
 
+  ok_count = track_results.count { |r| r[:ok] }
+
+  # Always write the per-provider file (partial output is useful for diagnostics).
   provider_json = File.join(transcription_dir, "transcription_#{provider[:name]}.json")
   File.write(provider_json, JSON.pretty_generate(merged))
   BigBlueButton.logger.info("Written: #{provider_json}")
 
+  # Only write the canonical transcription.json when at least one track
+  # succeeded. Writing it on a total failure would poison the recording: the
+  # early-exit guard would then skip every future retry (delete-to-rerun only).
   if canonical_path
-    File.write(canonical_path, JSON.pretty_generate(merged))
-    BigBlueButton.logger.info("Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+    if ok_count > 0
+      File.write(canonical_path, JSON.pretty_generate(merged))
+      BigBlueButton.logger.info("Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+    else
+      BigBlueButton.logger.error(
+        "NOT writing canonical #{canonical_path}: all #{track_results.size} track(s) failed " \
+        "for provider '#{provider[:name]}' — leaving it absent so the pipeline can retry"
+      )
+    end
   end
 
   {
     name:           provider[:name],
     track_results:  track_results,
-    ok_count:       track_results.count { |r|  r[:ok] },
+    ok_count:       ok_count,
     failed_count:   track_results.count { |r| !r[:ok] },
     total_segments: track_results.sum   { |r|  r[:segments].size }
   }
@@ -520,5 +533,19 @@ BigBlueButton.logger.info("  Canonical output : #{OUTPUT_JSON}")
 BigBlueButton.logger.info("  Elapsed time  : #{(Time.now - start_time).round(1)}s")
 BigBlueButton.logger.info("  (Processes for providers: #{max_parallel_providers})")
 BigBlueButton.logger.info("  (Processes for audio files: #{max_parallel_audio_files})")
+
+# Fail loud when the canonical provider produced no usable transcript. The
+# canonical file is the first provider's output; if that provider failed every
+# track, run_provider_transcription left transcription.json absent on purpose.
+# Exit non-zero (and without a canonical file) so the recording is retried
+# rather than published with an empty transcript.
+canonical_summary = provider_summaries.first
+if canonical_summary.nil? || canonical_summary[:ok_count].zero? || !File.exist?(OUTPUT_JSON)
+  BigBlueButton.logger.error(
+    "Transcription failed: canonical provider produced no successful tracks. " \
+    "Leaving #{OUTPUT_JSON} absent so the pipeline can retry."
+  )
+  exit 1
+end
 
 exit 0

@@ -46,6 +46,7 @@
   "group_cues": "Regrouper les répliques",
   "expand_collapse": "Développer / Réduire",
   "timestamps_note": "Horodatages relatifs au début de l'enregistrement.",
+  "transcript_unavailable": "Transcription non disponible pour cet enregistrement.",
   "action_item_owner": "Responsable :",
   "chat_tag": "chat",
   "transcript_format_labeled": "Avec identification des intervenants",

@@ -182,6 +182,13 @@
     </section>
     <% end %>
 
+    <% if @transcript_missing && !@has_chat %>
+    <section id="discussion" aria-labelledby="discussion-h">
+      <h2 id="discussion-h"><%= @strings["heading_transcript"] %></h2>
+      <p class="muted"><%= h(@strings.fetch("transcript_unavailable", "Transcript not available for this recording.")) %></p>
+    </section>
+    <% end %>
+
     <% if @summary && !@summary.empty? %>
       <section id="summary" aria-labelledby="summary-h">
         <div class="section-header">
