@@ -46,6 +46,7 @@
   "group_cues": "Agrupar legendas",
   "expand_collapse": "Expandir / Recolher",
   "timestamps_note": "Marcações de tempo relativas ao início da gravação.",
+  "transcript_unavailable": "Transcrição não disponível para esta gravação.",
   "action_item_owner": "Responsável:",
   "chat_tag": "chat",
   "transcript_format_labeled": "Com identificação de falantes",

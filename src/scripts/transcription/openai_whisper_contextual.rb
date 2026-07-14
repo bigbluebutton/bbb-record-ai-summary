@@ -52,13 +52,14 @@ if audio_file && events_xml && File.exist?(events_xml)
   events_doc = Nokogiri::XML(File.read(events_xml))
 
   if ENV['WHISPER_PROMPT'].to_s.strip.empty?
-    speaker_name = TranscriptionUtils.speaker_name_for_audio(events_doc, audio_file)
     parts = []
     parts << context_prompt unless context_prompt.empty?
-    if speaker_name
-      $stderr.puts "INFO : Speaker: #{speaker_name}"
-      parts << "Meeting participant #{speaker_name} speaking. " \
-               "This is their individual microphone audio from a meeting."
+    # Vocabulary priming: domain terms (context_prompt) plus participant names,
+    # not instruction text — Whisper treats the prompt as preceding transcript.
+    all_names = TranscriptionUtils.all_speaker_names(events_doc)
+    unless all_names.empty?
+      $stderr.puts "INFO : Participants: #{all_names.join(', ')}"
+      parts << "Meeting participants: #{all_names.join(', ')}."
     end
     ENV['WHISPER_PROMPT'] = parts.join(' ') unless parts.empty?
   end

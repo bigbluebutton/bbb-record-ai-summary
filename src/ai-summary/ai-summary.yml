@@ -28,22 +28,30 @@ llm:
   openai_api_key: ''
   albert_api_key: ''
 
+  # max_tokens caps the LENGTH of the generated summary/action-items output. If
+  # the model wants to write more than this, generation stops mid-sentence
+  # (finish_reason=length) and the summary is truncated. Keep it consistent with
+  # how long a summary your system_prompt asks for — raise it for long meetings
+  # or detailed multi-section summaries.
+
   # Claude (Anthropic) Configuration
   claude:
     model: 'claude-3-5-sonnet-20241022'  # or 'claude-3-haiku-20240307' for faster/cheaper
-    max_tokens: 1024
+    max_tokens: 4096  # raise for longer summaries; lower to cap cost
     temperature: 0.7
 
   # OpenAI Configuration
   openai:
     model: 'o4-mini'  # or 'gpt-4o' for better quality
-    # max_tokens: 1024 # - o4-mini doesn't expect these parameters
+    # max_tokens intentionally omitted: reasoning models like o4-mini reject it
+    # (they use max_completion_tokens). For gpt-4o-class models you may add e.g.
+    # max_tokens: 4096
     # temperature: 0.7 # - make sure the model chosen fits the parameters
 
   # Albert Configuration (albert.api.etalab.gouv.fr — French government API)
   albert:
     model: 'openai/gpt-oss-120b'  # check available models at albert.api.etalab.gouv.fr
-    max_tokens: 1024
+    max_tokens: 4096  # raise for longer summaries; lower to cap cost
     temperature: 0.7
 
   # Force the summary output language (ISO 639-1 code, e.g. 'en', 'fr', 'es').

@@ -46,6 +46,7 @@
   "group_cues": "Group cues",
   "expand_collapse": "Expand / Collapse",
   "timestamps_note": "Timestamps relative to recording start.",
+  "transcript_unavailable": "Transcript not available for this recording.",
   "action_item_owner": "Owner:",
   "chat_tag": "chat",
   "transcript_format_labeled": "Speaker-labeled",

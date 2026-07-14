@@ -43,8 +43,36 @@ require 'securerandom'
 require 'yaml'
 require_relative 'transcription_utils'
 
-MODEL     = 'whisper-1'.freeze
-MAX_BYTES = 25 * 1024 * 1024  # OpenAI hard limit per request
+DEFAULT_MODEL = 'whisper-1'.freeze
+MAX_BYTES     = 25 * 1024 * 1024  # OpenAI hard limit per request
+
+# Only diarizing transcription models (e.g. gpt-4o-transcribe-diarize) accept and
+# act on known_speaker_names[]. whisper-1 and the gpt-4o-*-transcribe models
+# currently ignore the field, but sending unknown parameters is fragile — gate it
+# on real support so a future stricter API (or a stricter proxy) does not 400.
+def diarization_model?(model)
+  model.to_s.include?('diarize')
+end
+
+# verbose_json returns the detected language as a full lowercase name
+# ("english"). Map common names to ISO 639-1 so downstream summarization gets a
+# usable language hint. Unknown names return nil rather than a wrong guess.
+WHISPER_LANG_TO_ISO = {
+  'english' => 'en', 'french' => 'fr', 'spanish' => 'es', 'portuguese' => 'pt',
+  'german' => 'de', 'italian' => 'it', 'dutch' => 'nl', 'russian' => 'ru',
+  'chinese' => 'zh', 'japanese' => 'ja', 'korean' => 'ko', 'arabic' => 'ar',
+  'hindi' => 'hi', 'polish' => 'pl', 'turkish' => 'tr', 'ukrainian' => 'uk',
+  'swedish' => 'sv', 'norwegian' => 'no', 'danish' => 'da', 'finnish' => 'fi',
+  'greek' => 'el', 'czech' => 'cs', 'romanian' => 'ro', 'hungarian' => 'hu',
+  'catalan' => 'ca', 'galician' => 'gl', 'basque' => 'eu'
+}.freeze
+
+def whisper_language_to_iso(name)
+  return nil if name.nil?
+  key = name.to_s.strip.downcase
+  return key if key.length == 2   # already an ISO code
+  WHISPER_LANG_TO_ISO[key]
+end
 
 # Default quality filter parameters
 DEFAULT_TEMPERATURE          = 0.0
@@ -80,11 +108,13 @@ end
 #     sum_no_speech_prob: Float    # sum of no_speech_prob across all raw segments
 #   }
 def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
+                model: DEFAULT_MODEL,
                 temperature: DEFAULT_TEMPERATURE, prompt: nil,
                 known_speaker_names: nil,
                 no_speech_threshold: DEFAULT_NO_SPEECH_THRESHOLD,
                 quality_score_threshold: DEFAULT_QUALITY_SCORE_THRESHOLD)
-  empty_result = { segments: [], raw_count: 0, sum_logprob: 0.0, sum_no_speech_prob: 0.0 }
+  empty_result = { segments: [], raw_count: 0, sum_logprob: 0.0, sum_no_speech_prob: 0.0,
+                   api_error: false, detected_language: nil }
 
   file_size = File.size(wav_path)
   if file_size > MAX_BYTES
@@ -94,14 +124,16 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
 
   boundary   = "----OpenAIBoundary#{SecureRandom.hex(16)}"
   body_parts = []
-  body_parts << text_field(boundary, 'model',           MODEL)
+  body_parts << text_field(boundary, 'model',           model)
   body_parts << text_field(boundary, 'language',        language) if language
   body_parts << text_field(boundary, 'response_format', 'verbose_json')
   body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
   body_parts << text_field(boundary, 'temperature',     temperature.to_s)
   body_parts << text_field(boundary, 'prompt',          prompt) if prompt
-  (known_speaker_names || []).each do |name|
-    body_parts << text_field(boundary, 'known_speaker_names[]', name)
+  if diarization_model?(model)
+    (known_speaker_names || []).each do |name|
+      body_parts << text_field(boundary, 'known_speaker_names[]', name)
+    end
   end
   body_parts << "--#{boundary}\r\n" \
                 "Content-Disposition: form-data; name=\"file\"; " \
@@ -118,7 +150,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
   response = http.request(req)
   unless response.is_a?(Net::HTTPSuccess)
     info "  → OpenAI API error #{response.code}: #{response.body[0, 200]}"
-    return empty_result
+    return empty_result.merge(api_error: true)
   end
 
   data        = JSON.parse(response.body)
@@ -149,10 +181,11 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
   end
 
   { segments: segments, raw_count: raw_count,
-    sum_logprob: sum_logprob, sum_no_speech_prob: sum_no_speech_prob }
+    sum_logprob: sum_logprob, sum_no_speech_prob: sum_no_speech_prob, api_error: false,
+    detected_language: data['language'] }
 rescue => e
   info "  → OpenAI call failed: #{e.message}"
-  empty_result
+  empty_result.merge(api_error: true)
 end
 
 # ---------------------------------------------------------------------------
@@ -231,6 +264,17 @@ known_speaker_names = if known_speaker_names_raw.empty?
                         known_speaker_names_raw.split(',').map(&:strip).reject(&:empty?).then { |a| a.empty? ? nil : a }
                       end
 
+model = ENV['OPENAI_MODEL'].to_s.strip
+model = openai_cfg['model'].to_s.strip if model.empty?
+model = DEFAULT_MODEL if model.empty?
+
+# known_speaker_names only works with diarizing models; drop it otherwise so we
+# never send a parameter the model does not support.
+if known_speaker_names && !diarization_model?(model)
+  info "known_speaker_names provided but model '#{model}' does not support diarization — ignoring"
+  known_speaker_names = nil
+end
+
 vad_opts = {
   enabled:         vad_cfg['enabled'] == true,
   threshold:       (vad_cfg['speech_threshold'] || 0.05).to_f,
@@ -253,7 +297,7 @@ chunks = result[:chunks]
 if chunks.empty?
   TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
   empty_config = {
-    'model'                   => MODEL,
+    'model'                   => model,
     'language'                => language,
     'temperature'             => temperature,
     'quality_score_threshold' => quality_threshold
@@ -296,18 +340,33 @@ http.read_timeout = 600
 segments             = []
 total_chunks         = chunks.size
 accepted_chunk_count = 0
+api_error_chunks     = 0
 raw_segment_total    = 0
 sum_logprob          = 0.0
 sum_no_speech_prob   = 0.0
+detected_languages   = []
+rolling_context      = nil   # tail of the previous chunk's transcript
+
+# Max characters of previous-chunk text to carry forward as Whisper prompt
+# context, so terminology and mid-sentence continuations survive chunk splits.
+ROLLING_CONTEXT_CHARS = 200
 
 http.start do |conn|
   chunks.each_with_index do |chunk_info, i|
     info "Chunk #{i + 1}/#{chunks.size}: #{chunk_info[:from_ms]}ms – #{chunk_info[:to_ms]}ms"
+
+    # Vocabulary/name prompt first, then the previous chunk's tail last so it sits
+    # immediately before the current audio (Whisper treats the prompt as the
+    # preceding transcript).
+    effective_prompt = [prompt, rolling_context].compact.map(&:strip).reject(&:empty?).join(' ')
+    effective_prompt = nil if effective_prompt.empty?
+
     result_chunk = call_openai(
       chunk_info[:path], api_key, language, conn,
+      model:                   model,
       chunk_offset_ms:         chunk_info[:from_ms],
       temperature:             temperature,
-      prompt:                  prompt,
+      prompt:                  effective_prompt,
       known_speaker_names:     known_speaker_names,
       no_speech_threshold:     no_speech_threshold,
       quality_score_threshold: quality_threshold
@@ -320,10 +379,26 @@ http.start do |conn|
     end
     segments.concat(result_chunk[:segments])
     accepted_chunk_count += 1 if result_chunk[:segments].any?
+    api_error_chunks     += 1 if result_chunk[:api_error]
     raw_segment_total    += result_chunk[:raw_count]
     sum_logprob          += result_chunk[:sum_logprob]
     sum_no_speech_prob   += result_chunk[:sum_no_speech_prob]
+    detected_languages   << result_chunk[:detected_language] if result_chunk[:detected_language]
+
+    chunk_text = result_chunk[:segments].map { |s| s['text'] }.join(' ').strip
+    rolling_context = chunk_text[-ROLLING_CONTEXT_CHARS..] || chunk_text unless chunk_text.empty?
   end
+end
+
+# Majority-vote the detected language across chunks and map to ISO 639-1.
+# Log the distribution: chunks whose language differs from the majority are a
+# useful hallucination signal.
+detected_iso = nil
+unless detected_languages.empty?
+  tally = detected_languages.tally
+  majority_name = tally.max_by { |_, c| c }&.first
+  detected_iso  = whisper_language_to_iso(majority_name)
+  info "Detected language distribution: #{tally.inspect} → majority '#{majority_name}' (ISO: #{detected_iso || 'unknown'})"
 end
 
 # ---------------------------------------------------------------------------
@@ -333,7 +408,7 @@ end
 TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
 
 config_block = {
-  'model'                   => MODEL,
+  'model'                   => model,
   'language'                => language,
   'temperature'             => temperature,
   'quality_score_threshold' => quality_threshold
@@ -360,9 +435,20 @@ quality_metrics = {
   'known_phrase_hits'           => []
 }
 
+# Prefer the explicitly configured language; otherwise fall back to the detected one.
+effective_language = language || detected_iso
+
 output = { 'transcription' => segments }
-output['language'] = language if language
+output['language'] = effective_language if effective_language
 output['metadata'] = { 'config' => config_block, 'quality_metrics' => quality_metrics }
 
 File.write(output_json, JSON.pretty_generate(output))
 info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"
+
+# Fail loud: when a meaningful fraction of chunks failed with API errors (auth,
+# rate limit, 5xx), exit non-zero so transcribe_audio.rb retries the whole file
+# instead of silently accepting a truncated or empty transcript.
+if total_chunks > 0 && api_error_chunks >= (total_chunks / 2.0).ceil
+  info "ERROR: #{api_error_chunks}/#{total_chunks} chunk(s) failed with API errors — exiting 1 to trigger retry"
+  exit 1
+end

@@ -78,13 +78,16 @@ def text_field(boundary, name, value)
   "#{value}\r\n"
 end
 
-# Posts wav_path to the Albert API. Returns cleaned text or nil.
+# Posts wav_path to the Albert API. Requests verbose_json so we get segment-level
+# timestamps (whisper-large-v3 supports them) instead of one blob per chunk.
+# Returns { text:, segments:, language: } or nil. segments may be empty if the
+# API returned only a flat transcription.
 def call_albert(wav_path, api_key, model, language, http)
   boundary   = "----AlbertBoundary#{SecureRandom.hex(16)}"
   body_parts = []
   body_parts << text_field(boundary, 'model',           model)
   body_parts << text_field(boundary, 'language',        language) if language
-  body_parts << text_field(boundary, 'response_format', 'json')
+  body_parts << text_field(boundary, 'response_format', 'verbose_json')
   body_parts << text_field(boundary, 'temperature',     '0')
   body_parts << "--#{boundary}\r\n" \
                 "Content-Disposition: form-data; name=\"file\"; " \
@@ -104,8 +107,11 @@ def call_albert(wav_path, api_key, model, language, http)
     return nil
   end
 
-  text = clean_repeated_words(JSON.parse(response.body)['text'].to_s.strip)
-  text.empty? ? nil : text
+  data      = JSON.parse(response.body)
+  full_text = clean_repeated_words(data['text'].to_s.strip)
+  return nil if full_text.empty?
+
+  { text: full_text, segments: (data['segments'] || []), language: data['language'] }
 rescue => e
   info "Albert call failed for #{File.basename(wav_path)}: #{e.message}"
   nil
@@ -276,7 +282,18 @@ http.open_timeout = 30
 http.read_timeout = 600
 
 # Albert API: transcribe each chunk
-segments = []
+segments           = []
+detected_languages = []
+
+# Attaches the chunk's speaker attribution to a segment hash.
+attach_speaker = lambda do |seg, chunk_info|
+  if chunk_info[:speaker_ids]
+    seg['speaker_ids'] = chunk_info[:speaker_ids]
+  elsif chunk_info[:speaker_id]
+    seg['speaker_id'] = chunk_info[:speaker_id]
+  end
+  seg
+end
 
 http.start do |conn|
   chunks.each_with_index do |chunk_info, i|
@@ -285,15 +302,17 @@ http.start do |conn|
     chunk   = chunk_info[:path]
     info "Chunk #{i + 1}/#{chunks.size}: #{from_ms}ms – #{to_ms}ms"
 
-    text = call_albert(chunk, api_key, model, language, conn)
+    res = call_albert(chunk, api_key, model, language, conn)
 
-    unless text
+    unless res
       info "  → Albert returned empty, skipping"
       next
     end
 
+    text = res[:text]
+    detected_languages << res[:language] if res[:language]
     word_count = text.split.size
-    info "  → #{word_count} word(s)"
+    info "  → #{word_count} word(s)#{res[:segments].any? ? ", #{res[:segments].size} segment(s)" : ''}"
 
     # Re-check with VAD when Albert returns suspiciously few words — likely a
     # hallucination on a clip that slipped through (e.g. VAD disabled or long clip).
@@ -309,20 +328,37 @@ http.start do |conn|
       end
     end
 
-    seg = { 'offsets' => { 'from' => from_ms, 'to' => to_ms }, 'text' => text }
-    if chunk_info[:speaker_ids]
-      seg['speaker_ids'] = chunk_info[:speaker_ids]
-    elsif chunk_info[:speaker_id]
-      seg['speaker_id'] = chunk_info[:speaker_id]
+    if res[:segments].any?
+      # Per-segment timestamps relative to the chunk start (from_ms). This also
+      # corrects the 1s pull-back skew: the API places speech at its real offset
+      # within the chunk rather than assuming it starts at from_ms.
+      res[:segments].each do |vs|
+        seg_text = clean_repeated_words(vs['text'].to_s.strip)
+        next if seg_text.empty?
+        seg = { 'offsets' => { 'from' => from_ms + (vs['start'].to_f * 1000).round,
+                               'to'   => from_ms + (vs['end'].to_f   * 1000).round },
+                'text' => seg_text }
+        segments << attach_speaker.call(seg, chunk_info)
+      end
+    else
+      # Fallback: no segment timestamps — one segment spanning the chunk.
+      seg = { 'offsets' => { 'from' => from_ms, 'to' => to_ms }, 'text' => text }
+      segments << attach_speaker.call(seg, chunk_info)
     end
-    segments << seg
   end
 end
 
 # Cleanup & output
 TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
 
+# Prefer configured language; else majority-vote the detected language.
+effective_language = language
+if effective_language.nil? && !detected_languages.empty?
+  effective_language = detected_languages.tally.max_by { |_, c| c }&.first
+  info "Detected language: #{effective_language} (#{detected_languages.tally.inspect})"
+end
+
 output = { 'transcription' => segments }
-output['language'] = language if language
+output['language'] = effective_language if effective_language
 File.write(output_json, JSON.pretty_generate(output))
 info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"

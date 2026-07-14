@@ -12,7 +12,7 @@ Run the full ai-summary pipeline (transcription, process, publish) against recor
 - `ffmpeg` (audio conversion)
 - `pandoc` + `texlive-xetex` (PDF generation)
 - `node` + `npm install -g node-vad` (optional, for VAD filtering)
-- Run `./test/run_pipeline.sh --setup-only` once to install the BBB library shim (requires sudo).
+- Run `./dev/run_pipeline.sh --setup-only` once to install the BBB library shim (requires sudo).
 
 **For transcription** (calls OpenAI Whisper API):
 - Create `/etc/bigbluebutton/post-archive-transcription.yml` with your API key:
@@ -39,16 +39,16 @@ Place `.tar.gz` archives of raw BBB recordings in `test-recordings/`. Each archi
 
 ```bash
 # Full pipeline (transcription + process + publish, no LLM)
-./test/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --skip-llm
+./dev/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --skip-llm
 
 # Skip transcription (use pre-existing transcription.json from tarball)
-./test/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --skip-transcription --skip-llm
+./dev/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --skip-transcription --skip-llm
 
 # Force re-transcription (clean + delete bundled transcription.json)
-./test/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --force-retranscribe --skip-llm
+./dev/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --force-retranscribe --skip-llm
 
 # Clean workspace and re-run
-./test/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --clean --skip-llm
+./dev/run_pipeline.sh test-recordings/<meeting_id>.tar.gz --clean --skip-llm
 ```
 
 ### Options
@@ -87,7 +87,7 @@ On a BBB server with HTTPS configured, the harness automatically copies output t
 The pipeline scripts (`process/ai-summary.rb`, `publish/ai-summary.rb`, `transcribe_audio.rb`) detect whether they're running from the BBB scripts directory or from the source tree, and adjust config paths accordingly:
 
 - **BBB server**: runs via `bundle exec` using the real BBB `recordandplayback` library. Scripts see the dev `__dir__` path and read configs from `src/`.
-- **Non-BBB machine**: `--setup-only` creates `/usr/local/bigbluebutton/core/` with a shim library (`test/lib/recordandplayback.rb`) that implements the subset of BBB methods the scripts use. Scripts are symlinked into the BBB tree so `__dir__` resolves to production paths.
+- **Non-BBB machine**: `--setup-only` creates `/usr/local/bigbluebutton/core/` with a shim library (`dev/lib/recordandplayback.rb`) that implements the subset of BBB methods the scripts use. Scripts are symlinked into the BBB tree so `__dir__` resolves to production paths.
 
 ### Directory layout during a test run
 
@@ -106,7 +106,7 @@ logs/ai-summary/              # process and publish logs (gitignored)
 
 ## Shim library
 
-`test/lib/recordandplayback.rb` is a standalone replacement for BBB's recording library. It implements only the methods the ai-summary scripts actually call:
+`dev/lib/recordandplayback.rb` is a standalone replacement for BBB's recording library. It implements only the methods the ai-summary scripts actually call:
 
 - `BigBlueButton.logger` — logger get/set (defaults to stdout)
 - `BigBlueButton.add_tag_to_xml` — XML manipulation via Nokogiri

@@ -139,8 +139,9 @@ end
 
 # Backend: custom transcribe.rb script
 class CustomScriptBackend
-  def initialize(custom_path)
+  def initialize(custom_path, output_log: nil)
     @script = custom_path
+    @output_log = output_log
   end
 
   def available?
@@ -153,8 +154,11 @@ class CustomScriptBackend
 
   def transcribe(audio_file, output_json, events_xml, timeout_seconds: nil)
     BigBlueButton.logger.info("Running #{File.basename(@script)}: #{File.basename(audio_file)}")
+    # Append provider stdout/stderr to the transcription log so API errors and
+    # per-chunk diagnostics are not lost.
+    output_redirect = @output_log ? [@output_log, 'a'] : '/dev/null'
     ok = run_process_with_timeout(timeout_seconds, @script, audio_file, output_json, events_xml,
-                                  [:out, :err] => '/dev/null')
+                                  [:out, :err] => output_redirect)
 
     if ok && File.exist?(output_json)
       BigBlueButton.logger.info("  -> #{File.basename(output_json)}")
@@ -276,10 +280,10 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
   threads.map(&:value)
 end
 
-def resolve_active_backends(providers)
+def resolve_active_backends(providers, output_log: nil)
   if providers.any?
     active = providers.each_with_object([]) do |p, result|
-      candidate = CustomScriptBackend.new(p[:path])
+      candidate = CustomScriptBackend.new(p[:path], output_log: output_log)
       if candidate.available?
         result << { name: p[:name], backend: candidate }
       else
@@ -301,7 +305,7 @@ def resolve_active_backends(providers)
       File.expand_path('../../transcription/whisper_cpp.rb', __dir__)
     end
 
-    candidate = CustomScriptBackend.new(whisper_script)
+    candidate = CustomScriptBackend.new(whisper_script, output_log: output_log)
     unless candidate.available?
       BigBlueButton.logger.error("whisper_cpp.rb not found or not executable at #{whisper_script}")
       BigBlueButton.logger.error("Install whisper.cpp or configure transcriber_path in transcription.yml")
@@ -365,19 +369,32 @@ def run_provider_transcription(provider, audio_files, transcription_dir, events_
   merged['metadata'] = { 'config' => provider_config, 'quality_metrics' => provider_metrics }.compact
   merged.delete('metadata') if merged['metadata'].empty?
 
+  ok_count = track_results.count { |r| r[:ok] }
+
+  # Always write the per-provider file (partial output is useful for diagnostics).
   provider_json = File.join(transcription_dir, "transcription_#{provider[:name]}.json")
   File.write(provider_json, JSON.pretty_generate(merged))
   BigBlueButton.logger.info("Written: #{provider_json}")
 
+  # Only write the canonical transcription.json when at least one track
+  # succeeded. Writing it on a total failure would poison the recording: the
+  # early-exit guard would then skip every future retry (delete-to-rerun only).
   if canonical_path
-    File.write(canonical_path, JSON.pretty_generate(merged))
-    BigBlueButton.logger.info("Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+    if ok_count > 0
+      File.write(canonical_path, JSON.pretty_generate(merged))
+      BigBlueButton.logger.info("Written: #{canonical_path} (canonical, from '#{provider[:name]}')")
+    else
+      BigBlueButton.logger.error(
+        "NOT writing canonical #{canonical_path}: all #{track_results.size} track(s) failed " \
+        "for provider '#{provider[:name]}' — leaving it absent so the pipeline can retry"
+      )
+    end
   end
 
   {
     name:           provider[:name],
     track_results:  track_results,
-    ok_count:       track_results.count { |r|  r[:ok] },
+    ok_count:       ok_count,
     failed_count:   track_results.count { |r| !r[:ok] },
     total_segments: track_results.sum   { |r|  r[:segments].size }
   }
@@ -438,7 +455,7 @@ end
 BigBlueButton.logger.info("Found #{audio_files.size} audio file(s)")
 
 providers       = get_normalized_transcriber_paths(transcription_props['transcriber_path'])
-active_backends = resolve_active_backends(providers)
+active_backends = resolve_active_backends(providers, output_log: log_path)
 
 BigBlueButton.logger.info("Active provider(s): #{active_backends.map { |b| b[:name] }.join(', ')}")
 
@@ -516,5 +533,19 @@ BigBlueButton.logger.info("  Canonical output : #{OUTPUT_JSON}")
 BigBlueButton.logger.info("  Elapsed time  : #{(Time.now - start_time).round(1)}s")
 BigBlueButton.logger.info("  (Processes for providers: #{max_parallel_providers})")
 BigBlueButton.logger.info("  (Processes for audio files: #{max_parallel_audio_files})")
+
+# Fail loud when the canonical provider produced no usable transcript. The
+# canonical file is the first provider's output; if that provider failed every
+# track, run_provider_transcription left transcription.json absent on purpose.
+# Exit non-zero (and without a canonical file) so the recording is retried
+# rather than published with an empty transcript.
+canonical_summary = provider_summaries.first
+if canonical_summary.nil? || canonical_summary[:ok_count].zero? || !File.exist?(OUTPUT_JSON)
+  BigBlueButton.logger.error(
+    "Transcription failed: canonical provider produced no successful tracks. " \
+    "Leaving #{OUTPUT_JSON} absent so the pipeline can retry."
+  )
+  exit 1
+end
 
 exit 0
