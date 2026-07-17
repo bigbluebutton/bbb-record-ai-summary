@@ -41,6 +41,8 @@ require 'uri'
 require 'json'
 require 'securerandom'
 require 'yaml'
+require 'logger'
+require 'fileutils'
 require_relative 'transcription_utils'
 
 DEFAULT_MODEL = 'whisper-1'.freeze
@@ -79,19 +81,6 @@ DEFAULT_TEMPERATURE          = 0.0
 DEFAULT_NO_SPEECH_THRESHOLD  = 1.0   # 1.0 = disabled; lower to reject high-no-speech-prob segments
 DEFAULT_QUALITY_SCORE_THRESHOLD = 0.35
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def die(msg)
-  $stderr.puts "ERROR: #{msg}"
-  exit 1
-end
-
-def info(msg)
-  $stderr.puts "INFO : #{msg}"
-end
-
 def text_field(boundary, name, value)
   "--#{boundary}\r\n" \
   "Content-Disposition: form-data; name=\"#{name}\"\r\n\r\n" \
@@ -118,7 +107,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
 
   file_size = File.size(wav_path)
   if file_size > MAX_BYTES
-    info "  → chunk too large (#{(file_size / 1024.0 / 1024).round(1)} MB), skipping"
+    $logger.info("  → chunk too large (#{(file_size / 1024.0 / 1024).round(1)} MB), skipping")
     return empty_result
   end
 
@@ -149,7 +138,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
 
   response = http.request(req)
   unless response.is_a?(Net::HTTPSuccess)
-    info "  → OpenAI API error #{response.code}: #{response.body[0, 200]}"
+    $logger.info("  → OpenAI API error #{response.code}: #{response.body[0, 200]}")
     return empty_result.merge(api_error: true)
   end
 
@@ -184,7 +173,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
     sum_logprob: sum_logprob, sum_no_speech_prob: sum_no_speech_prob, api_error: false,
     detected_language: data['language'] }
 rescue => e
-  info "  → OpenAI call failed: #{e.message}"
+  $logger.info("  → OpenAI call failed: #{e.message}")
   empty_result.merge(api_error: true)
 end
 
@@ -196,13 +185,42 @@ audio_file  = ARGV[0]
 output_json = ARGV[1]
 events_xml  = ARGV[2]
 
-die "Usage: openai_whisper.rb <audio_file> <output_json_file> <events_xml_file>" \
-  if audio_file.nil? || audio_file.strip.empty? ||
-     output_json.nil? || output_json.strip.empty? ||
-     events_xml.nil? || events_xml.strip.empty?
+if audio_file.nil? || audio_file.strip.empty? ||
+   output_json.nil? || output_json.strip.empty? ||
+   events_xml.nil? || events_xml.strip.empty?
+  $stderr.puts "ERROR: Usage: openai_whisper.rb <audio_file> <output_json_file> <events_xml_file>"
+  exit 1
+end
 
-die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
-die "Events XML not found: #{events_xml}" unless File.exist?(events_xml)
+# Logger setup — mirrors albert_whisper.rb / whisper_cpp.rb
+meeting_id = File.basename(File.dirname(File.expand_path(events_xml)))
+
+BBB_LIB_TRANSCRIPTION_DIR = '/usr/local/bigbluebutton/core/lib/transcription'.freeze
+BBB_SCRIPTS_DIR           = '/usr/local/bigbluebutton/core/scripts'.freeze
+bbb_props_path            = "#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"
+
+log_dir = if File.expand_path(__dir__) == BBB_LIB_TRANSCRIPTION_DIR && File.exist?(bbb_props_path)
+  bbb_props = YAML.safe_load(File.read(bbb_props_path)) || {}
+  bbb_props['log_dir'] || '/var/log/bigbluebutton'
+else
+  dev_cfg_path = File.expand_path('../../config/bigbluebutton.yml', __dir__)
+  dev_cfg = File.exist?(dev_cfg_path) ? (YAML.safe_load(File.read(dev_cfg_path)) || {}) : {}
+  dev_cfg['log_dir'] || '/tmp'
+end
+
+FileUtils.mkdir_p(log_dir)
+$stdout.sync = true
+$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-openai_whisper-#{meeting_id}.log"), 'daily')
+
+unless File.exist?(audio_file)
+  $logger.error("Audio file not found: #{audio_file}")
+  exit 1
+end
+
+unless File.exist?(events_xml)
+  $logger.error("Events XML not found: #{events_xml}")
+  exit 1
+end
 
 TRANSCRIPTION_YML = File.join(__dir__, 'transcription.yml').freeze
 
@@ -223,14 +241,14 @@ def load_transcription_config(yml_path)
   config = {}
   if File.exist?(yml_path)
     config = YAML.safe_load(File.read(yml_path)) rescue {}
-    info "Loaded config from #{yml_path}"
+    $logger.info("Loaded config from #{yml_path}")
   end
 
   override_path = '/etc/bigbluebutton/post-archive-transcription.yml'
   if File.exist?(override_path)
     override = YAML.safe_load(File.read(override_path)) rescue {}
     config = deep_merge_hashes(config, override)
-    info "Applied config override from #{override_path}"
+    $logger.info("Applied config override from #{override_path}")
   end
 
   config
@@ -242,8 +260,10 @@ vad_cfg    = config['vad']    || {}
 
 api_key = ENV['OPENAI_API_KEY'].to_s.strip
 api_key = openai_cfg['api_key'].to_s.strip if api_key.empty?
-die 'No OpenAI API key found. Set OPENAI_API_KEY or configure openai.api_key in transcription.yml' \
-  if api_key.empty?
+if api_key.empty?
+  $logger.error('No OpenAI API key found. Set OPENAI_API_KEY or configure openai.api_key in transcription.yml')
+  exit 1
+end
 
 language = ENV['OPENAI_LANGUAGE'].to_s.strip
 language = config['language'].to_s.strip if language.empty?
@@ -271,7 +291,7 @@ model = DEFAULT_MODEL if model.empty?
 # known_speaker_names only works with diarizing models; drop it otherwise so we
 # never send a parameter the model does not support.
 if known_speaker_names && !diarization_model?(model)
-  info "known_speaker_names provided but model '#{model}' does not support diarization — ignoring"
+  $logger.info("known_speaker_names provided but model '#{model}' does not support diarization — ignoring")
   known_speaker_names = nil
 end
 
@@ -288,9 +308,12 @@ vad_opts = {
 
 livekit = ENV.fetch('BBB_AUDIO_BACKEND', 'livekit') != 'freeswitch'
 result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml, livekit: livekit, vad: vad_opts)
-die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
+if result.nil?
+  $logger.error("Audio conversion failed — ffmpeg is required for non-mp3/wav files.")
+  exit 1
+end
 
-info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
+$logger.info("Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)")
 
 chunks = result[:chunks]
 
@@ -317,11 +340,11 @@ if chunks.empty?
     }
   }
   File.write(output_json, JSON.pretty_generate(empty_output))
-  info "Written 0 segment(s) to #{File.basename(output_json)}"
+  $logger.info("Written 0 segment(s) to #{File.basename(output_json)}")
   exit 0
 end
 
-info "Chunks: #{chunks.size}"
+$logger.info("Chunks: #{chunks.size}")
 
 # ---------------------------------------------------------------------------
 # HTTP connection (shared across all chunks)
@@ -353,7 +376,7 @@ ROLLING_CONTEXT_CHARS = 200
 
 http.start do |conn|
   chunks.each_with_index do |chunk_info, i|
-    info "Chunk #{i + 1}/#{chunks.size}: #{chunk_info[:from_ms]}ms – #{chunk_info[:to_ms]}ms"
+    $logger.info("Chunk #{i + 1}/#{chunks.size}: #{chunk_info[:from_ms]}ms – #{chunk_info[:to_ms]}ms")
 
     # Vocabulary/name prompt first, then the previous chunk's tail last so it sits
     # immediately before the current audio (Whisper treats the prompt as the
@@ -371,7 +394,7 @@ http.start do |conn|
       no_speech_threshold:     no_speech_threshold,
       quality_score_threshold: quality_threshold
     )
-    info "  → #{result_chunk[:segments].size} segment(s) (#{result_chunk[:raw_count]} raw)"
+    $logger.info("  → #{result_chunk[:segments].size} segment(s) (#{result_chunk[:raw_count]} raw)")
     if chunk_info[:speaker_ids]
       result_chunk[:segments].each { |s| s['speaker_ids'] = chunk_info[:speaker_ids] }
     elsif chunk_info[:speaker_id]
@@ -398,7 +421,7 @@ unless detected_languages.empty?
   tally = detected_languages.tally
   majority_name = tally.max_by { |_, c| c }&.first
   detected_iso  = whisper_language_to_iso(majority_name)
-  info "Detected language distribution: #{tally.inspect} → majority '#{majority_name}' (ISO: #{detected_iso || 'unknown'})"
+  $logger.info("Detected language distribution: #{tally.inspect} → majority '#{majority_name}' (ISO: #{detected_iso || 'unknown'})")
 end
 
 # ---------------------------------------------------------------------------
@@ -443,12 +466,12 @@ output['language'] = effective_language if effective_language
 output['metadata'] = { 'config' => config_block, 'quality_metrics' => quality_metrics }
 
 File.write(output_json, JSON.pretty_generate(output))
-info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"
+$logger.info("Written #{segments.size} segment(s) to #{File.basename(output_json)}")
 
 # Fail loud: when a meaningful fraction of chunks failed with API errors (auth,
 # rate limit, 5xx), exit non-zero so transcribe_audio.rb retries the whole file
 # instead of silently accepting a truncated or empty transcript.
 if total_chunks > 0 && api_error_chunks >= (total_chunks / 2.0).ceil
-  info "ERROR: #{api_error_chunks}/#{total_chunks} chunk(s) failed with API errors — exiting 1 to trigger retry"
+  $logger.error("#{api_error_chunks}/#{total_chunks} chunk(s) failed with API errors — exiting 1 to trigger retry")
   exit 1
 end

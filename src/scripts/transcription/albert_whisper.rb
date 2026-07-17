@@ -52,26 +52,6 @@ ENDPOINT_PATH  = '/v1/audio/transcriptions'.freeze
 # If Albert returns this many words or fewer, re-run VAD to detect hallucinations.
 MIN_TRANSCRIPTION_WORDS = 3
 
-# Helpers
-def die(msg)
-  if $logger
-    $logger.error(msg)
-    $stdout.puts "[ERROR] #{msg}"
-  else
-    $stderr.puts "ERROR: #{msg}"
-  end
-  exit 1
-end
-
-def info(msg)
-  if $logger
-    $logger.info(msg)
-    $stdout.puts "[INFO ] #{msg}"
-  else
-    $stderr.puts "INFO : #{msg}"
-  end
-end
-
 def text_field(boundary, name, value)
   "--#{boundary}\r\n" \
   "Content-Disposition: form-data; name=\"#{name}\"\r\n\r\n" \
@@ -103,7 +83,7 @@ def call_albert(wav_path, api_key, model, language, http)
 
   response = http.request(req)
   unless response.is_a?(Net::HTTPSuccess)
-    info "Albert API error #{response.code} for #{File.basename(wav_path)}: #{response.body[0, 200]}"
+    $logger.info("Albert API error #{response.code} for #{File.basename(wav_path)}: #{response.body[0, 200]}")
     return nil
   end
 
@@ -113,7 +93,7 @@ def call_albert(wav_path, api_key, model, language, http)
 
   { text: full_text, segments: (data['segments'] || []), language: data['language'] }
 rescue => e
-  info "Albert call failed for #{File.basename(wav_path)}: #{e.message}"
+  $logger.info("Albert call failed for #{File.basename(wav_path)}: #{e.message}")
   nil
 end
 
@@ -126,7 +106,7 @@ def read_meeting_language(events_xml_path)
   lang = doc.at_xpath('//meta/recording-transcription-language')&.text&.strip
   lang.nil? || lang.empty? ? nil : lang
 rescue => e
-  info "Could not read metadata.xml: #{e.message}"
+  $logger.info("Could not read metadata.xml: #{e.message}")
   nil
 end
 
@@ -150,13 +130,12 @@ audio_file  = ARGV[0]
 output_json = ARGV[1]
 events_xml  = ARGV[2]
 
-die "Usage: albert_whisper.rb <audio_file> <output_json_file> <events_xml_file>" \
-  if audio_file.nil? || audio_file.strip.empty? ||
-     output_json.nil? || output_json.strip.empty? ||
-     events_xml.nil? || events_xml.strip.empty?
-
-die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
-die "Events XML not found: #{events_xml}" unless File.exist?(events_xml)
+if audio_file.nil? || audio_file.strip.empty? ||
+   output_json.nil? || output_json.strip.empty? ||
+   events_xml.nil? || events_xml.strip.empty?
+  $stderr.puts "ERROR: Usage: albert_whisper.rb <audio_file> <output_json_file> <events_xml_file>"
+  exit 1
+end
 
 # Logger setup — mirrors transcribe_audio.rb config loading.
 # meeting_id is derived from the events.xml path: <recording_dir>/raw/<meeting_id>/events.xml
@@ -177,8 +156,17 @@ end
 
 FileUtils.mkdir_p(log_dir)
 $stdout.sync = true
-$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-albert-#{meeting_id}.log"))
-$logger.level = Logger::INFO
+$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-albert-#{meeting_id}.log"), 'daily')
+
+unless File.exist?(audio_file)
+  $logger.error("Audio file not found: #{audio_file}")
+  exit 1
+end
+
+unless File.exist?(events_xml)
+  $logger.error("Events XML not found: #{events_xml}")
+  exit 1
+end
 
 # Config
 
@@ -200,14 +188,14 @@ def load_transcription_config(yml_paths)
   yml_path = yml_paths.find { |p| File.exist?(p) }
   if yml_path
     config = YAML.safe_load(File.read(yml_path)) rescue {}
-    info "Loaded config from #{yml_path}"
+    $logger.info("Loaded config from #{yml_path}")
   end
 
   override_path = '/etc/bigbluebutton/post-archive-transcription.yml'
   if File.exist?(override_path)
     override = YAML.safe_load(File.read(override_path)) rescue {}
     config = deep_merge_hashes(config, override)
-    info "Applied config override from #{override_path}"
+    $logger.info("Applied config override from #{override_path}")
   end
 
   config
@@ -225,8 +213,10 @@ vad_cfg    = config['vad']    || {}
 
 api_key = ENV['ALBERT_API_KEY'].to_s.strip
 api_key = albert_cfg['api_key'].to_s.strip if api_key.empty?
-die 'No Albert API key found. Set ALBERT_API_KEY or configure albert.api_key in transcription.yml' \
-  if api_key.empty?
+if api_key.empty?
+  $logger.error('No Albert API key found. Set ALBERT_API_KEY or configure albert.api_key in transcription.yml')
+  exit 1
+end
 
 model = ENV['ALBERT_MODEL'].to_s.strip
 model = albert_cfg['model'].to_s.strip if model.empty?
@@ -252,16 +242,19 @@ result = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
                                                  livekit:      livekit,
                                                  merge_gap_ms: TranscriptionUtils::MERGE_GAP_MS,
                                                  vad:          vad_opts)
-die "Audio conversion failed — ffmpeg is required for non-mp3/wav files." if result.nil?
+if result.nil?
+  $logger.error("Audio conversion failed — ffmpeg is required for non-mp3/wav files.")
+  exit 1
+end
 
-info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
+$logger.info("Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)")
 
-info "Model    : #{model}"
+$logger.info("Model    : #{model}")
 lang_source = if !ENV['ALBERT_LANGUAGE'].to_s.strip.empty? then 'env'
                elsif meeting_language                          then 'meta_recording-transcription-language'
                elsif language                                  then 'transcription.yml'
                end
-info "Language : #{language || '(auto-detect)'}#{lang_source ? " [#{lang_source}]" : ''}"
+$logger.info("Language : #{language || '(auto-detect)'}#{lang_source ? " [#{lang_source}]" : ''}")
 
 chunks = result[:chunks]
 
@@ -270,7 +263,7 @@ if chunks.empty?
   output = { 'transcription' => [] }
   output['language'] = language if language
   File.write(output_json, JSON.pretty_generate(output))
-  info "Written 0 segment(s) to #{File.basename(output_json)}"
+  $logger.info("Written 0 segment(s) to #{File.basename(output_json)}")
   exit 0
 end
 
@@ -300,30 +293,30 @@ http.start do |conn|
     from_ms = chunk_info[:from_ms]
     to_ms   = chunk_info[:to_ms]
     chunk   = chunk_info[:path]
-    info "Chunk #{i + 1}/#{chunks.size}: #{from_ms}ms – #{to_ms}ms"
+    $logger.info("Chunk #{i + 1}/#{chunks.size}: #{from_ms}ms – #{to_ms}ms")
 
     res = call_albert(chunk, api_key, model, language, conn)
 
     unless res
-      info "  → Albert returned empty, skipping"
+      $logger.info("  → Albert returned empty, skipping")
       next
     end
 
     text = res[:text]
     detected_languages << res[:language] if res[:language]
     word_count = text.split.size
-    info "  → #{word_count} word(s)#{res[:segments].any? ? ", #{res[:segments].size} segment(s)" : ''}"
+    $logger.info("  → #{word_count} word(s)#{res[:segments].any? ? ", #{res[:segments].size} segment(s)" : ''}")
 
     # Re-check with VAD when Albert returns suspiciously few words — likely a
     # hallucination on a clip that slipped through (e.g. VAD disabled or long clip).
     if word_count <= MIN_TRANSCRIPTION_WORDS
-      info "  → few words, re-checking with VAD..."
+      $logger.info("  → few words, re-checking with VAD...")
       unless TranscriptionUtils.has_speech?(chunk, enabled: true,
                                             threshold: vad_opts[:threshold],
                                             min_speech_ms: vad_opts[:min_speech_ms],
                                             max_duration_ms: vad_opts[:max_duration_ms],
                                             force: true)
-        info "  → VAD: no speech on re-check, skipping (likely hallucination)"
+        $logger.info("  → VAD: no speech on re-check, skipping (likely hallucination)")
         next
       end
     end
@@ -355,10 +348,10 @@ TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
 effective_language = language
 if effective_language.nil? && !detected_languages.empty?
   effective_language = detected_languages.tally.max_by { |_, c| c }&.first
-  info "Detected language: #{effective_language} (#{detected_languages.tally.inspect})"
+  $logger.info("Detected language: #{effective_language} (#{detected_languages.tally.inspect})")
 end
 
 output = { 'transcription' => segments }
 output['language'] = effective_language if effective_language
 File.write(output_json, JSON.pretty_generate(output))
-info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"
+$logger.info("Written #{segments.size} segment(s) to #{File.basename(output_json)}")

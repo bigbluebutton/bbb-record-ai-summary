@@ -1004,11 +1004,13 @@ module Extractors
 
       # Generate summary (map-reduce when the input is too large for one call)
       logger.info("Generating summary using LLM...")
+      llm_start_time = Time.now
       summary = if combined_text.length <= MAX_INPUT_CHARS
                   llm_client.summarize(combined_text)
                 else
                   map_reduce_summarize(llm_client, combined_text, logger)
                 end
+      logger.info("LLM summary generation took #{(Time.now - llm_start_time).round(1)}s")
 
       # Return nil if disabled or empty response
       logger.warn("LLM returned nil or empty summary — skipping summary section") if summary.nil? || summary.strip.empty?
@@ -1020,6 +1022,9 @@ module Extractors
 
       logger.info("Generated summary: #{summary.length} characters, saved to summary.txt")
       summary.strip
+    rescue LLMClient::APIError => e
+      logger.warn("Summary generation failed (provider error): #{e.message}")
+      nil
     rescue StandardError => e
       logger.error("Summary generation failed: #{e.message}")
       nil
@@ -1084,7 +1089,9 @@ module Extractors
 
       logger.info("Generating action items using LLM...")
       begin
+        llm_start_time = Time.now
         response = llm_client.complete(user_content, system: SYSTEM_PROMPT)
+        logger.info("LLM action items generation took #{(Time.now - llm_start_time).round(1)}s")
 
         if response.nil? || response.strip.empty?
           logger.warn("LLM returned nil or empty response for action items — skipping")
@@ -1120,8 +1127,11 @@ module Extractors
         end
 
         action_items
+      rescue LLMClient::APIError => e
+        logger.warn("Action items extraction failed (provider error): #{e.message}")
+        []
       rescue StandardError => e
-        logger.warn("Action items extraction failed: #{e.message}")
+        logger.error("Action items extraction failed: #{e.message}")
         []
       end
     rescue StandardError => e

@@ -4,6 +4,12 @@ require 'json'
 require 'net/http'
 
 module LLMClient
+  # Raised for failures that originate from the provider itself (non-2xx HTTP
+  # responses, API-reported errors, exhausted transient-error retries) as
+  # opposed to bugs in our own code — callers can rescue this separately to
+  # log/handle provider-side failures differently from internal errors.
+  class APIError < StandardError; end
+
   class Base
     attr_reader :config, :provider_config
 
@@ -133,7 +139,7 @@ module LLMClient
         rescue Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET,
                Errno::ECONNREFUSED, EOFError, SocketError => e
           @logger.warn("LLM API transient error #{e.class}: #{e.message} (attempt #{attempt + 1}/#{MAX_RETRIES + 1})")
-          raise if attempt == MAX_RETRIES
+          raise APIError, "#{e.class}: #{e.message}" if attempt == MAX_RETRIES
         end
 
         sleep(2**attempt) if attempt < MAX_RETRIES
@@ -192,11 +198,11 @@ module LLMClient
 
       response = http_post_with_retry(uri, request)
       unless response.is_a?(Net::HTTPSuccess)
-        raise "Claude API HTTP #{response.code}: #{response.body.to_s[0, 500]}"
+        raise APIError, "Claude API HTTP #{response.code}: #{response.body.to_s[0, 500]}"
       end
 
       result = JSON.parse(response.body)
-      raise "Claude API error: #{result['error']['message']}" if result['error']
+      raise APIError, "Claude API error: #{result['error']['message']}" if result['error']
 
       if result['stop_reason'] == 'max_tokens'
         @logger.warn("Claude response truncated at max_tokens=#{max_tokens} (stop_reason=max_tokens). " \
@@ -205,7 +211,7 @@ module LLMClient
 
       result.dig('content', 0, 'text')
     rescue Net::HTTPError => e
-      raise "Claude API error: #{e.message}"
+      raise APIError, "Claude API error: #{e.message}"
     end
   end
 
@@ -244,11 +250,11 @@ module LLMClient
 
       response = http_post_with_retry(uri, request)
       unless response.is_a?(Net::HTTPSuccess)
-        raise "OpenAI API HTTP #{response.code}: #{response.body.to_s[0, 500]}"
+        raise APIError, "OpenAI API HTTP #{response.code}: #{response.body.to_s[0, 500]}"
       end
 
       result = JSON.parse(response.body)
-      raise "OpenAI API error: #{result.dig('error', 'message')}" if result['error']
+      raise APIError, "OpenAI API error: #{result.dig('error', 'message')}" if result['error']
 
       if result.dig('choices', 0, 'finish_reason') == 'length'
         @logger.warn("OpenAI response truncated (finish_reason=length). " \
@@ -257,7 +263,7 @@ module LLMClient
 
       result.dig('choices', 0, 'message', 'content')
     rescue Net::HTTPError => e
-      raise "OpenAI API error: #{e.message}"
+      raise APIError, "OpenAI API error: #{e.message}"
     end
   end
 
@@ -297,11 +303,11 @@ module LLMClient
       response = http_post_with_retry(uri, request)
 
       unless response.is_a?(Net::HTTPSuccess)
-        raise "Albert API HTTP #{response.code}: #{response.body[0...500]}"
+        raise APIError, "Albert API HTTP #{response.code}: #{response.body[0...500]}"
       end
 
       result = JSON.parse(response.body)
-      raise "Albert API error: #{result.dig('error', 'message')}" if result['error']
+      raise APIError, "Albert API error: #{result.dig('error', 'message')}" if result['error']
 
       finish_reason = result.dig('choices', 0, 'finish_reason')
       if finish_reason == 'length'
@@ -315,7 +321,7 @@ module LLMClient
       end
       content
     rescue Net::HTTPError => e
-      raise "Albert API error: #{e.message}"
+      raise APIError, "Albert API error: #{e.message}"
     end
   end
 end

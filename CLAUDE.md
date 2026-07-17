@@ -123,10 +123,15 @@ Factory: `LLMClient::Base.create(logger, language: nil, prompt_addition: nil)` r
 ## Logging
 
 ```bash
-tail -f /var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log   # transcription
+tail -f /var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log                  # transcription orchestrator
+tail -f /var/log/bigbluebutton/post_archive-transcribe-albert-<meeting_id>.log           # Albert provider
+tail -f /var/log/bigbluebutton/post_archive-transcribe-openai_whisper-<meeting_id>.log   # OpenAI Whisper provider
+tail -f /var/log/bigbluebutton/post_archive-transcribe-whisper_cpp-<meeting_id>.log       # whisper.cpp fallback
 tail -f /var/log/bigbluebutton/ai-summary/process-<meeting_id>.log        # process
 tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log        # publish
 ```
+
+Each transcription provider writes its own log file, separate from the orchestrator log — check the provider-specific file for API-level errors (e.g. `"Albert API error <code> ..."`) when a provider fails. All logs rotate daily (`Logger.new(path, 'daily')`).
 
 Dev harness logs go to `logs/ai-summary/` in the project root.
 
