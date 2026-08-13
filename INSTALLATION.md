@@ -80,13 +80,8 @@ openai:
   api_key: "..."
 ```
 
-- Claude
-```yaml
-transcriber_path: "/usr/local/bigbluebutton/core/lib/transcription/claude_whisper.rb"
-
-claude:
-  api_key: "..."
-```
+  There is no Claude transcriber: Anthropic has no speech-to-text API. Use OpenAI
+  or Albert for transcription — `llm.provider: claude` still works for the summary.
 
 - Albert
 ```yaml
@@ -112,13 +107,18 @@ language: en
 
 ### 4. Add the format to the recording pipeline
 
-Edit:
+BigBlueButton shallow-merges this file over
+`/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`, so override the pipeline
+here rather than editing that package-managed file (a BBB upgrade would overwrite it).
+Neither the directory nor the file exists by default — create both:
 
 ```bash
+sudo mkdir -p /etc/bigbluebutton/recording
 sudo vi /etc/bigbluebutton/recording/recording.yml
 ```
 
-Use:
+The merge replaces the whole `steps:` key, so list every format you want, not just
+`ai-summary`:
 
 ```yaml
 steps:
