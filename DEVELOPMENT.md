@@ -129,7 +129,8 @@ Recommended practice is to keep secrets in `/etc/bigbluebutton/` overrides.
 ### Test a provider directly
 
 ```bash
-sudo ruby /usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb \
+cd /usr/local/bigbluebutton/core/scripts
+sudo -u bigbluebutton bundle exec ruby ../lib/transcription/albert_whisper.rb \
   /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
   /tmp/test_transcription.json \
   /var/bigbluebutton/recording/raw/<meeting_id>/events.xml

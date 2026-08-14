@@ -160,7 +160,7 @@ module LLMClient
   class ClaudeClient < Base
     API_URL = 'https://api.anthropic.com/v1/messages'.freeze
     API_VERSION = '2023-06-01'.freeze
-    DEFAULT_MODEL = 'claude-3-5-sonnet-20241022'.freeze
+    DEFAULT_MODEL = 'claude-opus-5'.freeze
 
     def initialize(config, logger, language: nil, prompt_addition: nil)
       super
@@ -178,10 +178,13 @@ module LLMClient
       body = {
         model: model,
         max_tokens: max_tokens,
-        temperature: @provider_config['temperature'] || 0.7,
         system: system,
         messages: [{ role: 'user', content: user }]
       }
+
+      # Only send temperature when the operator asked for one: the Claude 5 family
+      # (claude-opus-5, claude-sonnet-5, ...) rejects sampling parameters with a 400.
+      body[:temperature] = @provider_config['temperature'] unless @provider_config['temperature'].nil?
 
       uri = URI(API_URL)
       request = Net::HTTP::Post.new(uri)
@@ -203,7 +206,16 @@ module LLMClient
                      "Raise llm.claude.max_tokens for complete output.")
       end
 
-      result.dig('content', 0, 'text')
+      # Pick the text blocks rather than content[0]: models that think (the Claude 5
+      # family thinks by default) return thinking blocks ahead of the answer.
+      blocks = result['content'] || []
+      text = blocks.select { |b| b['type'] == 'text' }.map { |b| b['text'] }.join.strip
+
+      if text.empty?
+        raise "Claude API returned no text content (stop_reason=#{result['stop_reason'].inspect})"
+      end
+
+      text
     rescue Net::HTTPError => e
       raise "Claude API error: #{e.message}"
     end

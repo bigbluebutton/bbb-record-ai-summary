@@ -41,17 +41,22 @@ The phrase is appended for both summary and action items generation. If empty or
 
 ### Reprocess a recording
 
+Run these from `scripts/` as the `bigbluebutton` user: the stages need the bundled
+gems (`bundle exec`), the process stage loads `ai-summary.yml` relative to the
+working directory, and running as root leaves root-owned files the worker can't
+rewrite later.
+
 ```bash
-cd /usr/local/bigbluebutton/core
+cd /usr/local/bigbluebutton/core/scripts
 
 # Re-run transcription
-sudo bundle exec ruby scripts/post_archive/transcribe_audio.rb -m <meeting_id>
+sudo -u bigbluebutton bundle exec ruby post_archive/transcribe_audio.rb -m <meeting_id>
 
 # Re-run process stage
-sudo ruby scripts/process/ai-summary.rb -m <meeting_id>
+sudo -u bigbluebutton bundle exec ruby process/ai-summary.rb -m <meeting_id>
 
 # Re-run publish stage
-sudo ruby scripts/publish/ai-summary.rb -m <meeting_id>-ai-summary
+sudo -u bigbluebutton bundle exec ruby publish/ai-summary.rb -m <meeting_id>-ai-summary
 ```
 
 ### Force a fresh transcription
@@ -73,11 +78,14 @@ sudo rm -rf /var/bigbluebutton/published/ai-summary/${MEETING_ID}
 ### Test a provider against a single audio file
 
 ```bash
-sudo ruby /usr/local/bigbluebutton/core/lib/transcription/albert_whisper.rb \
+cd /usr/local/bigbluebutton/core/scripts
+sudo -u bigbluebutton bundle exec ruby ../lib/transcription/albert_whisper.rb \
   /var/bigbluebutton/recording/raw/<meeting_id>/audio/<track>.webm \
   /tmp/test_transcription.json \
   /var/bigbluebutton/recording/raw/<meeting_id>/events.xml
 ```
+
+Without `bundle exec` this fails with `cannot load such file -- nokogiri`.
 
 ## Logs and Status
 
@@ -104,7 +112,7 @@ ls /var/bigbluebutton/published/ai-summary/<meeting_id>/
 |---|---|
 | LLM override config | `/etc/bigbluebutton/ai-summary.yml` |
 | Transcription override config | `/etc/bigbluebutton/post-archive-transcription.yml` |
-| BBB recording pipeline config | `/etc/bigbluebutton/recording/recording.yml` |
+| BBB recording pipeline config | `/etc/bigbluebutton/recording/recording.yml` (operator override; create it — shallow-merged over `/usr/local/bigbluebutton/core/scripts/bigbluebutton.yml`) |
 | Post-archive script | `/usr/local/bigbluebutton/core/scripts/post_archive/transcribe_audio.rb` |
 | Process script | `/usr/local/bigbluebutton/core/scripts/process/ai-summary.rb` |
 | Publish script | `/usr/local/bigbluebutton/core/scripts/publish/ai-summary.rb` |
