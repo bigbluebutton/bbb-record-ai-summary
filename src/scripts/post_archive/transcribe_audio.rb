@@ -424,8 +424,7 @@ end
 FileUtils.mkdir_p(log_dir) if log_dir
 log_path = "#{log_dir}/post_archive-transcribe-#{meeting_id}.log"
 
-logger = Logger.new(log_path)
-logger.level = Logger::INFO
+logger = Logger.new(log_path, 'daily')
 BigBlueButton.logger = logger
 
 BigBlueButton.logger.info("Meeting ID : #{meeting_id}")

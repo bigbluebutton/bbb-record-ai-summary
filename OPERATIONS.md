@@ -98,6 +98,20 @@ sudo tail -f /var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log
 sudo tail -f /var/log/bigbluebutton/bbb-rap-worker.log
 ```
 
+### Log files
+
+All rotate daily. Each transcription provider writes its own log file, separate from the orchestrator log — check the provider-specific file first when narrowing down whether a transcription failure came from the provider's API or from the orchestrator/pipeline.
+
+| Log file | Stage | Contains |
+|---|---|---|
+| `/var/log/bigbluebutton/post_archive-transcribe-<meeting_id>.log` | Post-archive (orchestrator) | Provider selection, retries, per-file pass/fail, elapsed time |
+| `/var/log/bigbluebutton/post_archive-transcribe-albert-<meeting_id>.log` | Post-archive (Albert provider) | Per-chunk Albert API calls and errors (`"Albert API error <code> ..."`) |
+| `/var/log/bigbluebutton/post_archive-transcribe-openai_whisper-<meeting_id>.log` | Post-archive (OpenAI Whisper provider) | Per-chunk OpenAI API calls and errors |
+| `/var/log/bigbluebutton/post_archive-transcribe-whisper_cpp-<meeting_id>.log` | Post-archive (whisper.cpp fallback) | Local transcription output per chunk |
+| `/var/log/bigbluebutton/ai-summary/process-<meeting_id>.log` | Process | Extractors, LLM summary/action-items generation (incl. provider API errors surfaced as `"Albert API HTTP ..."` etc.), LLM timing |
+| `/var/log/bigbluebutton/ai-summary/publish-<meeting_id>.log` | Publish | PDF conversion, metadata updates, final copy to publish dir |
+| `/var/log/bigbluebutton/bbb-rap-worker.log` | BBB recording pipeline | Not part of this project; the worker that invokes each stage |
+
 ### Check pipeline status
 
 ```bash

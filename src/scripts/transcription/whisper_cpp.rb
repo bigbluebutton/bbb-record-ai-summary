@@ -49,25 +49,6 @@ MODEL_SEARCH_DIRS = [
   '/usr/share/whisper/models',
 ].freeze
 
-def die(msg)
-  if $logger
-    $logger.error(msg)
-    $stdout.puts "[ERROR] #{msg}"
-  else
-    $stderr.puts "ERROR: #{msg}"
-  end
-  exit 1
-end
-
-def info(msg)
-  if $logger
-    $logger.info(msg)
-    $stdout.puts "[INFO ] #{msg}"
-  else
-    $stderr.puts "INFO : #{msg}"
-  end
-end
-
 def find_binary
   path = ENV['WHISPER_BINARY'].to_s.strip
   return path if !path.empty? && File.executable?(path)
@@ -91,13 +72,12 @@ audio_file  = ARGV[0]
 output_json = ARGV[1]
 events_xml  = ARGV[2]
 
-die "Usage: whisper_cpp.rb <audio_file> <output_json_file> <events_xml_file>" \
-  if audio_file.nil? || audio_file.strip.empty? ||
-     output_json.nil? || output_json.strip.empty? ||
-     events_xml.nil? || events_xml.strip.empty?
-
-die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
-die "Events XML not found: #{events_xml}"  unless File.exist?(events_xml)
+if audio_file.nil? || audio_file.strip.empty? ||
+   output_json.nil? || output_json.strip.empty? ||
+   events_xml.nil? || events_xml.strip.empty?
+  $stderr.puts "ERROR: Usage: whisper_cpp.rb <audio_file> <output_json_file> <events_xml_file>"
+  exit 1
+end
 
 # Logger setup — mirrors albert_whisper.rb
 meeting_id = File.basename(File.dirname(File.expand_path(events_xml)))
@@ -117,46 +97,64 @@ end
 
 FileUtils.mkdir_p(log_dir)
 $stdout.sync = true
-$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-whisper_cpp-#{meeting_id}.log"))
-$logger.level = Logger::INFO
+$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-whisper_cpp-#{meeting_id}.log"), 'daily')
+
+unless File.exist?(audio_file)
+  $logger.error("Audio file not found: #{audio_file}")
+  exit 1
+end
+
+unless File.exist?(events_xml)
+  $logger.error("Events XML not found: #{events_xml}")
+  exit 1
+end
 
 # Locate binary and model
 binary = find_binary
-die "whisper.cpp binary not found. Searched:\n  #{BINARY_SEARCH_PATHS.join("\n  ")}\n" \
-    "Install whisper.cpp or set WHISPER_BINARY." unless binary
+unless binary
+  $logger.error("whisper.cpp binary not found. Searched:\n  #{BINARY_SEARCH_PATHS.join("\n  ")}\n" \
+                "Install whisper.cpp or set WHISPER_BINARY.")
+  exit 1
+end
 
 model = find_model
-die "No whisper model found. Searched dirs:\n  #{MODEL_SEARCH_DIRS.join("\n  ")}\n" \
-    "Download a ggml model or set WHISPER_MODEL." unless model
+unless model
+  $logger.error("No whisper model found. Searched dirs:\n  #{MODEL_SEARCH_DIRS.join("\n  ")}\n" \
+                "Download a ggml model or set WHISPER_MODEL.")
+  exit 1
+end
 
-info "Binary: #{binary}"
-info "Model : #{model}"
+$logger.info("Binary: #{binary}")
+$logger.info("Model : #{model}")
 
 # Prepare audio chunks via events.xml
 livekit = ENV.fetch('BBB_AUDIO_BACKEND', 'livekit') != 'freeswitch'
 result  = TranscriptionUtils.prepare_audio_chunks(audio_file, events_xml,
                                                   livekit:      livekit,
                                                   merge_gap_ms: TranscriptionUtils::MERGE_GAP_MS)
-die "Audio conversion failed — ffmpeg is required." if result.nil?
+if result.nil?
+  $logger.error("Audio conversion failed — ffmpeg is required.")
+  exit 1
+end
 
-info "Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)"
+$logger.info("Audio: #{File.basename(audio_file)} (#{(File.size(result[:work_file]) / 1024.0).round(1)} KB)")
 
 chunks = result[:chunks]
 
 if chunks.empty?
   TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
   File.write(output_json, JSON.generate({ 'transcription' => [] }))
-  info "Written 0 segment(s) to #{File.basename(output_json)}"
+  $logger.info("Written 0 segment(s) to #{File.basename(output_json)}")
   exit 0
 end
 
-info "Chunks: #{chunks.size}"
+$logger.info("Chunks: #{chunks.size}")
 
 all_segments       = []
 detected_languages = []
 
 chunks.each_with_index do |chunk, i|
-  info "Chunk #{i + 1}/#{chunks.size}: #{chunk[:from_ms]}ms – #{chunk[:to_ms]}ms"
+  $logger.info("Chunk #{i + 1}/#{chunks.size}: #{chunk[:from_ms]}ms – #{chunk[:to_ms]}ms")
   chunk_prefix = chunk[:path].delete_suffix('.wav')
 
   ok = system(
@@ -168,7 +166,7 @@ chunks.each_with_index do |chunk, i|
 
   whisper_out = "#{chunk_prefix}.json"
   unless ok && File.exist?(whisper_out)
-    info "  Chunk #{i + 1} failed, skipping"
+    $logger.info("  Chunk #{i + 1} failed, skipping")
     next
   end
 
@@ -191,9 +189,9 @@ chunks.each_with_index do |chunk, i|
       seg
     end
     all_segments.concat(segs)
-    info "  -> #{segs.size} segment(s)"
+    $logger.info("  -> #{segs.size} segment(s)")
   rescue JSON::ParserError => e
-    info "  Could not parse whisper output for chunk #{i + 1}: #{e.message}"
+    $logger.info("  Could not parse whisper output for chunk #{i + 1}: #{e.message}")
   ensure
     File.delete(whisper_out) if File.exist?(whisper_out)
   end
@@ -205,7 +203,7 @@ out = { 'transcription' => all_segments }
 unless detected_languages.empty?
   majority = detected_languages.tally.max_by { |_, c| c }&.first
   out['language'] = majority if majority
-  info "Detected language: #{majority} (#{detected_languages.tally.inspect})"
+  $logger.info("Detected language: #{majority} (#{detected_languages.tally.inspect})")
 end
 File.write(output_json, JSON.generate(out))
-info "Written #{all_segments.size} segment(s) to #{File.basename(output_json)}"
+$logger.info("Written #{all_segments.size} segment(s) to #{File.basename(output_json)}")
