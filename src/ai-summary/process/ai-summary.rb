@@ -31,6 +31,60 @@ require 'time'
 
 require File.expand_path('../../../lib/ai-summary/llm_client.rb', __FILE__)
 
+# --- Metrics ----------------------------------------------------------------
+# Per-meeting logs are appended across reruns, so durations derived by
+# differencing timestamps are unreliable. Instead every stage emits one
+# self-contained logfmt line tagged with a run_id. Stock Ruby Logger prefixes
+# each line, so logfmt (not JSON) is used: it survives the prefix and parses
+# with a Loki/Promtail `logfmt` stage or plain grep/awk.
+#
+#   AI_SUMMARY_METRICS v=1 stage=process meeting_id=… run_id=… process_ms=10412 …
+
+# Identifies one execution of this script.
+def ai_summary_run_id
+  $ai_summary_run_id ||= "#{(Time.now.utc.to_f * 1000).to_i}-#{Process.pid}"
+end
+
+def ai_summary_monotonic_ms
+  (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).round
+end
+
+# Renders key=value pairs, quoting anything that isn't a bare token. Nil and
+# empty values are dropped so consumers never see a fabricated zero.
+def ai_summary_logfmt(fields)
+  fields.reject { |_k, v| v.nil? || v.to_s.empty? }.map do |key, value|
+    text = value.to_s
+    text.match?(/\A[\w.:+-]+\z/) ? "#{key}=#{text}" : "#{key}=#{text.inspect}"
+  end.join(' ')
+end
+
+def emit_ai_summary_metrics(logger, fields)
+  logger.info("AI_SUMMARY_METRICS v=1 #{ai_summary_logfmt(fields)}")
+end
+
+# One line per failure, carrying the answer to "is this the provider or us?".
+# Provider/model come from the last recorded LLM call (which is recorded even
+# when the call fails); they are simply omitted if the failure happened before
+# any call was attempted, e.g. a bad API key.
+def emit_ai_summary_error(logger, stage:, phase:, meeting_id:, error:, provider: nil, model: nil)
+  kind = LLMClient::Base.classify(error)
+  status = error.respond_to?(:http_status) ? error.http_status : nil
+  last_call = LLMClient::Base.call_log.last
+  provider ||= error.respond_to?(:provider) ? error.provider : nil
+  provider ||= last_call && last_call[:provider]
+  model ||= last_call && last_call[:model]
+  logger.error("AI_SUMMARY_ERROR v=1 " + ai_summary_logfmt(
+    stage: stage, phase: phase, meeting_id: meeting_id, run_id: ai_summary_run_id,
+    kind: kind, provider: provider, model: model, http_status: status,
+    error_class: error.class.name, msg: error.message.to_s[0, 300]
+  ))
+  # A provider fault is explained by its status and body; a module fault needs
+  # the code path, so only that case pays for a backtrace.
+  error.backtrace&.first(10)&.each { |line| logger.error("  #{line}") } if kind == 'MODULE_ERROR'
+  kind
+end
+# ----------------------------------------------------------------------------
+
 module WebVTTParser
   # Parse a WebVTT file and return array of cues
   # Returns: [{start: "00:00:00.252", end: "00:00:28.732", speaker: "Name", text: "..."}]
@@ -999,7 +1053,11 @@ module Extractors
       begin
         llm_client = LLMClient::Base.create(logger, language: language, prompt_addition: prompt_addition)
       rescue StandardError => e
-        raise "Failed to initialize LLM client: #{e.message}"
+        # Re-raise the original error rather than wrapping it in a RuntimeError:
+        # the class is what tells an operator whether this is a bad config, the
+        # provider, or us.
+        logger.error("Failed to initialize LLM client: #{e.class}: #{e.message}")
+        raise
       end
 
       # Generate summary (map-reduce when the input is too large for one call)
@@ -1021,6 +1079,8 @@ module Extractors
       logger.info("Generated summary: #{summary.length} characters, saved to summary.txt")
       summary.strip
     rescue StandardError => e
+      emit_ai_summary_error(logger, stage: 'process', phase: 'llm_summary',
+                            meeting_id: $ai_summary_meeting_id, error: e)
       logger.error("Summary generation failed: #{e.message}")
       nil
     end
@@ -1121,10 +1181,14 @@ module Extractors
 
         action_items
       rescue StandardError => e
+        emit_ai_summary_error(logger, stage: 'process', phase: 'llm_action_items',
+                              meeting_id: $ai_summary_meeting_id, error: e)
         logger.warn("Action items extraction failed: #{e.message}")
         []
       end
     rescue StandardError => e
+      emit_ai_summary_error(logger, stage: 'process', phase: 'llm_action_items',
+                            meeting_id: $ai_summary_meeting_id, error: e)
       logger.error("Action items extraction error: #{e.message}")
       []
     end
@@ -1466,6 +1530,13 @@ unless FileTest.directory?(target_dir)
   logger = Logger.new("#{log_dir}/ai-summary/process-#{meeting_id}.log", 'daily')
   BigBlueButton.logger = logger
   BigBlueButton.logger.info("Processing script ai-summary.rb")
+  # Marks a run boundary in a log that is appended to on every reprocess.
+  BigBlueButton.logger.info("AI_SUMMARY_RUN_START v=1 " + ai_summary_logfmt(
+    stage: 'process', meeting_id: meeting_id, run_id: ai_summary_run_id
+  ))
+  process_started_ms = ai_summary_monotonic_ms
+  $ai_summary_meeting_id = meeting_id
+  LLMClient::Base.reset_call_log
   BigBlueButton.logger.warn("Removed stale process dir from a previous incomplete run: #{target_dir}") if stale_process_dir
   FileUtils.mkdir_p target_dir
   prompt_addition = extract_meta_prompt_addition(raw_archive_dir)
@@ -1677,6 +1748,40 @@ unless FileTest.directory?(target_dir)
     File.write("#{target_dir}/metadata.xml", metadata.root)
     BigBlueButton.logger.info("Created metadata.xml with state=processed and timing info")
 
+    # Timings for this stage. The publish stage reads this file (before it
+    # deletes the process dir) to build the whole-pipeline rollup.
+    process_ms = ai_summary_monotonic_ms - process_started_ms
+    llm_calls = LLMClient::Base.call_log
+    llm_timings = {
+      'llm_calls'           => llm_calls.length,
+      'llm_provider'        => llm_calls.first && llm_calls.first[:provider],
+      'llm_model'           => llm_calls.first && llm_calls.first[:model],
+      'llm_summary_ms'      => llm_calls.select { |c| c[:op] == 'summary' }.sum { |c| c[:ms] },
+      'llm_action_items_ms' => llm_calls.select { |c| c[:op] == 'action_items' }.sum { |c| c[:ms] },
+      'llm_total_ms'        => llm_calls.sum { |c| c[:ms] },
+      'llm_failed_calls'    => llm_calls.count { |c| !c[:ok] }
+    }
+    summary_present = File.exist?("#{target_dir}/summary.txt")
+    process_timings = llm_timings.merge(
+      'schema' => 1, 'stage' => 'process', 'run_id' => ai_summary_run_id,
+      'meeting_id' => meeting_id, 'script_ms' => process_ms,
+      'summary_present' => summary_present,
+      'outcome' => 'ok'
+    )
+    File.write("#{target_dir}/ai-summary-timings.json", JSON.pretty_generate(process_timings))
+
+    emit_ai_summary_metrics(BigBlueButton.logger,
+                            stage: 'process', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                            outcome: 'ok', script_ms: process_ms,
+                            llm_provider: llm_timings['llm_provider'], llm_model: llm_timings['llm_model'],
+                            llm_calls: llm_timings['llm_calls'],
+                            llm_summary_ms: llm_timings['llm_summary_ms'],
+                            llm_action_items_ms: llm_timings['llm_action_items_ms'],
+                            llm_total_ms: llm_timings['llm_total_ms'],
+                            llm_failed_calls: llm_timings['llm_failed_calls'],
+                            summary_present: summary_present,
+                            action_items: (JSON.parse(File.read("#{target_dir}/action_items.json")).length rescue nil))
+
     # Write status file
     File.write(done_file, "Processed #{meeting_id}")
 
@@ -1685,6 +1790,12 @@ unless FileTest.directory?(target_dir)
     e.backtrace.each do |traceline|
       BigBlueButton.logger.error(traceline)
     end
+    # A failed run's durations are the interesting ones — emit before exiting.
+    emit_ai_summary_metrics(BigBlueButton.logger,
+                            stage: 'process', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                            outcome: 'failed', error_class: e.class.name,
+                            script_ms: ai_summary_monotonic_ms - process_started_ms,
+                            llm_total_ms: LLMClient::Base.call_log.sum { |c| c[:ms] })
     exit 1
   end
 else
