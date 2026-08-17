@@ -95,8 +95,59 @@ STATIC_PUBLISHED_FILES = [
   { filename: 'transcription.vtt',  type: 'vtt',  category: 'transcription' },
 ].freeze
 
+# --- Metrics ----------------------------------------------------------------
+# See the matching block in process/ai-summary.rb for why this is logfmt and
+# why every line carries a run_id.
+
+def ai_summary_run_id
+  $ai_summary_run_id ||= "#{(Time.now.utc.to_f * 1000).to_i}-#{Process.pid}"
+end
+
+def ai_summary_monotonic_ms
+  (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).round
+end
+
+def ai_summary_logfmt(fields)
+  fields.reject { |_k, v| v.nil? || v.to_s.empty? }.map do |key, value|
+    text = value.to_s
+    text.match?(/\A[\w.:+-]+\z/) ? "#{key}=#{text}" : "#{key}=#{text.inspect}"
+  end.join(' ')
+end
+
+def emit_ai_summary_metrics(logger, fields)
+  logger.info("AI_SUMMARY_METRICS v=1 #{ai_summary_logfmt(fields)}")
+end
+
+def read_json_or_nil(path)
+  JSON.parse(File.read(path))
+rescue StandardError
+  nil
+end
+
+# Adds bbb-ai-summary-* keys to <meta>, which getRecordings returns verbatim in
+# <metadata> and can filter on. This is where whole-pipeline numbers live;
+# <playback><processing_time> stays the process step only, so it remains
+# comparable with every other recording format.
+def add_ai_summary_meta(metadata_path, fields, logger)
+  doc = File.open(metadata_path) { |f| Nokogiri::XML(f) }
+  meta = doc.at_xpath('recording/meta')
+  unless meta
+    meta = Nokogiri::XML::Node.new('meta', doc)
+    doc.at('recording').add_child(meta)
+  end
+  fields.reject { |_k, v| v.nil? || v.to_s.empty? }.each do |key, value|
+    meta.at_xpath(key.to_s)&.remove # keep reruns idempotent
+    node = Nokogiri::XML::Node.new(key.to_s, doc)
+    node.content = value.to_s # Nokogiri escapes; values include provider/model strings from YAML
+    meta.add_child(node)
+  end
+  File.write(metadata_path, Nokogiri::XML(doc.to_xml) { |x| x.noblanks }.root)
+  logger.info("Added ai-summary timing metadata to metadata.xml")
+end
+# ----------------------------------------------------------------------------
+
 # Helper method to update metadata.xml with playback information
-def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, logger)
+def update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, logger, processing_time: nil)
   logger.info("Updating metadata.xml with playback information")
 
   metadata = File.open(metadata_path) { |f| Nokogiri::XML(f) }
@@ -115,6 +166,9 @@ def update_metadata_with_playback(metadata_path, playback_protocol, playback_hos
     xml.playback {
       xml.format("ai-summary")
       xml.link("#{base_url}/ai-summary.#{format}")
+      # Same element, same position, as publish/presentation.rb. bbb-web maps it
+      # to <processingTime> in getRecordings; without it the API reports 0.
+      xml.processing_time(processing_time.to_s) if processing_time
       xml.duration(recording_time.to_s)
       xml.extensions {
         xml.urls {
@@ -189,7 +243,32 @@ if FileTest.directory?(final_publish_dir)
   exit 0
 end
 
+# The rollup is emitted before the cleanup that follows it, so a failure there
+# would otherwise produce a second, contradicting stage=pipeline line for the
+# same run_id.
+pipeline_emitted = false
+
 begin
+  BigBlueButton.logger.info("AI_SUMMARY_RUN_START v=1 " + ai_summary_logfmt(
+    stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id
+  ))
+  publish_started_ms = ai_summary_monotonic_ms
+
+  # Read every timing input while the process dir still exists — it is deleted
+  # at the end of this script (and by the publish worker), which is why these
+  # numbers never reached the published metadata before.
+  #
+  # processing_time is written by BBB's process worker after the process script
+  # exits, and only when it ran under the worker; a manual rerun (see
+  # OPERATIONS.md) leaves it absent, so fall back to the script's own measurement.
+  worker_process_ms = if File.exist?("#{process_dir}/processing_time")
+                        File.read("#{process_dir}/processing_time").to_i
+                      end
+  process_timings = read_json_or_nil("#{process_dir}/ai-summary-timings.json")
+  transcription_timings = read_json_or_nil("#{raw_archive_dir}/transcription/ai-summary-timings.json")
+  process_ms_source = worker_process_ms ? 'worker' : 'script'
+  process_ms = worker_process_ms || process_timings&.dig('script_ms')
+
   # Create target directory (remove first to clear any leftover state from a previous failed run)
   BigBlueButton.logger.info("Making dir #{target_dir}")
   FileUtils.rm_rf(target_dir) if File.exist?(target_dir)
@@ -199,7 +278,11 @@ begin
   source_md = "#{process_dir}/ai-summary.md"
   output_pdf = "#{target_dir}/ai-summary.pdf"
 
-  convert_markdown_to_pdf(source_md, output_pdf, BigBlueButton.logger)
+  pdf_started_ms = ai_summary_monotonic_ms
+  # Returns false rather than raising when pandoc fails or the markdown is
+  # missing, so the recording still publishes — but the run is not clean.
+  pdf_ok = convert_markdown_to_pdf(source_md, output_pdf, BigBlueButton.logger)
+  pdf_ms = ai_summary_monotonic_ms - pdf_started_ms
 
   copy_process_file_to_publish_dir("ai-summary.md", "ai-summary.md", process_dir, target_dir, BigBlueButton.logger)
 
@@ -228,7 +311,7 @@ begin
   published_files = static_files + provider_files
 
   metadata_path = "#{target_dir}/metadata.xml"
-  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, BigBlueButton.logger)
+  update_metadata_with_playback(metadata_path, playback_protocol, playback_host, meeting_id, format, recording_time, published_files, BigBlueButton.logger, processing_time: process_ms)
 
   # Ensure publish directory exists
   FileUtils.mkdir_p(publish_dir) unless FileTest.directory?(publish_dir)
@@ -238,6 +321,42 @@ begin
   BigBlueButton.add_raw_size_to_metadata(target_dir, raw_dir)
   BigBlueButton.add_playback_size_to_metadata(target_dir)
 
+  # Whole-pipeline rollup. total_ms sums the stage durations; it excludes the
+  # queue waits between workers, so it is processing cost, not user-perceived
+  # latency.
+  transcription_ms = transcription_timings&.dig('wall_ms')
+  publish_ms = ai_summary_monotonic_ms - publish_started_ms
+  total_ms = [transcription_ms, process_ms, publish_ms].compact.sum
+  summary_present = process_timings.nil? ? nil : process_timings['summary_present']
+  status = if summary_present.nil? then nil
+           elsif summary_present then 'ok'
+           # An operator who set provider: disabled gets no summary by design;
+           # reporting that as no-summary would flag every recording forever.
+           elsif process_timings['llm_provider'].to_s == 'disabled' then 'disabled'
+           else 'no-summary'
+           end
+
+  # One outcome for the whole pipeline: the worst any stage reported. Both
+  # upstream stages record theirs in the timings files already read above.
+  # An upstream 'failed' caps at 'degraded' here — reaching this point means the
+  # recording published despite it. Pipeline 'failed' is reserved for the rescue
+  # below, where nothing published at all.
+  publish_outcome = pdf_ok ? 'ok' : 'degraded'
+  stage_outcomes = [transcription_timings&.dig('outcome'), process_timings&.dig('outcome')]
+                   .compact.map { |o| o == 'failed' ? 'degraded' : o } << publish_outcome
+  pipeline_outcome = %w[failed degraded ok].find { |v| stage_outcomes.include?(v) } || 'ok'
+
+  add_ai_summary_meta(metadata_path, {
+    'bbb-ai-summary-status'           => status,
+    'bbb-ai-summary-total-ms'         => total_ms,
+    'bbb-ai-summary-transcription-ms' => transcription_ms,
+    'bbb-ai-summary-process-ms'       => process_ms,
+    'bbb-ai-summary-publish-ms'       => publish_ms,
+    'bbb-ai-summary-llm-ms'           => process_timings&.dig('llm_total_ms'),
+    'bbb-ai-summary-llm-provider'     => process_timings&.dig('llm_provider'),
+    'bbb-ai-summary-asr-provider'     => transcription_timings&.dig('canonical_provider')
+  }, BigBlueButton.logger)
+
   # Copy to final publish location if different
   unless target_dir == final_publish_dir
     FileUtils.cp_r(target_dir, publish_dir)
@@ -245,6 +364,29 @@ begin
   else
     BigBlueButton.logger.info("Files already in publish location: #{target_dir}")
   end
+
+  # Emitted only once the files are actually in place: reporting the rollup
+  # before the copy would call a run that then failed to publish 'ok'. Only the
+  # cleanup below happens after this point.
+  emit_ai_summary_metrics(BigBlueButton.logger,
+                          stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                          outcome: publish_outcome, script_ms: publish_ms, pdf_ms: pdf_ms,
+                          process_ms: process_ms, process_ms_source: process_ms_source)
+
+  emit_ai_summary_metrics(BigBlueButton.logger,
+                          stage: 'pipeline', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                          outcome: pipeline_outcome, status: status,
+                          asr_provider: transcription_timings&.dig('canonical_provider'),
+                          llm_provider: process_timings&.dig('llm_provider'),
+                          llm_model: process_timings&.dig('llm_model'),
+                          transcription_ms: transcription_ms,
+                          transcription_run_id: transcription_timings&.dig('run_id'),
+                          process_ms: process_ms,
+                          llm_summary_ms: process_timings&.dig('llm_summary_ms'),
+                          llm_action_items_ms: process_timings&.dig('llm_action_items_ms'),
+                          publish_ms: publish_ms, pdf_ms: pdf_ms, total_ms: total_ms,
+                          complete: [transcription_ms, process_ms, publish_ms].none?(&:nil?))
+  pipeline_emitted = true
 
   BigBlueButton.logger.info("Finished publishing script ai-summary.rb successfully.")
 
@@ -261,6 +403,24 @@ rescue Exception => e
   BigBlueButton.logger.error(e.message)
   e.backtrace.each do |traceline|
     BigBlueButton.logger.error(traceline)
+  end
+
+  # `defined?` is true for a lexically-earlier assignment even when it never ran,
+  # so it would leave nil here and raise inside this handler.
+  failed_script_ms = publish_started_ms && ai_summary_monotonic_ms - publish_started_ms
+  emit_ai_summary_metrics(BigBlueButton.logger,
+                          stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                          outcome: 'failed', error_class: e.class.name,
+                          script_ms: failed_script_ms)
+
+  # Emit the rollup here too, unless the success path already did. Without it a
+  # failed pipeline is a missing stage=pipeline line rather than a failed one, so
+  # anything counting those lines cannot see the failure at all.
+  unless pipeline_emitted
+    emit_ai_summary_metrics(BigBlueButton.logger,
+                            stage: 'pipeline', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                            outcome: 'failed', error_class: e.class.name,
+                            publish_ms: failed_script_ms, complete: false)
   end
 
   # Write failure status file

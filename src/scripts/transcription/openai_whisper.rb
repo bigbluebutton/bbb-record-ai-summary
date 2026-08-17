@@ -41,6 +41,8 @@ require 'uri'
 require 'json'
 require 'securerandom'
 require 'yaml'
+require 'logger'
+require 'fileutils'
 require_relative 'transcription_utils'
 
 DEFAULT_MODEL = 'whisper-1'.freeze
@@ -84,12 +86,32 @@ DEFAULT_QUALITY_SCORE_THRESHOLD = 0.35
 # ---------------------------------------------------------------------------
 
 def die(msg)
-  $stderr.puts "ERROR: #{msg}"
+  if $logger
+    $logger.error(msg)
+    $stdout.puts "[ERROR] #{msg}"
+  else
+    $stderr.puts "ERROR: #{msg}"
+  end
   exit 1
 end
 
 def info(msg)
-  $stderr.puts "INFO : #{msg}"
+  if $logger
+    $logger.info(msg)
+    $stdout.puts "[INFO ] #{msg}"
+  else
+    $stderr.puts "INFO : #{msg}"
+  end
+end
+
+# Non-fatal failures, so an API outage is visible to severity-based alerting.
+def log_error(msg)
+  if $logger
+    $logger.error(msg)
+    $stdout.puts "[ERROR] #{msg}"
+  else
+    $stderr.puts "ERROR: #{msg}"
+  end
 end
 
 def text_field(boundary, name, value)
@@ -149,7 +171,7 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
 
   response = http.request(req)
   unless response.is_a?(Net::HTTPSuccess)
-    info "  → OpenAI API error #{response.code}: #{response.body[0, 200]}"
+    log_error "PROVIDER_ERROR OpenAI API HTTP #{response.code}: #{response.body.to_s[0, 200]}"
     return empty_result.merge(api_error: true)
   end
 
@@ -203,6 +225,31 @@ die "Usage: openai_whisper.rb <audio_file> <output_json_file> <events_xml_file>"
 
 die "Audio file not found: #{audio_file}" unless File.exist?(audio_file)
 die "Events XML not found: #{events_xml}" unless File.exist?(events_xml)
+
+# Logger setup — mirrors albert_whisper.rb. Without a file logger this script's
+# output only reached the parent transcription log via stdout redirection, so
+# its lines carried no timestamp, PID, or severity and API failures could not be
+# dated.
+# meeting_id is derived from the events.xml path: <recording_dir>/raw/<meeting_id>/events.xml
+meeting_id = File.basename(File.dirname(File.expand_path(events_xml)))
+
+BBB_LIB_TRANSCRIPTION_DIR = '/usr/local/bigbluebutton/core/lib/transcription'.freeze
+BBB_SCRIPTS_DIR           = '/usr/local/bigbluebutton/core/scripts'.freeze
+bbb_props_path            = "#{BBB_SCRIPTS_DIR}/bigbluebutton.yml"
+
+log_dir = if File.expand_path(__dir__) == BBB_LIB_TRANSCRIPTION_DIR && File.exist?(bbb_props_path)
+  bbb_props = YAML.safe_load(File.read(bbb_props_path)) || {}
+  bbb_props['log_dir'] || '/var/log/bigbluebutton'
+else
+  dev_cfg_path = File.expand_path('../../config/bigbluebutton.yml', __dir__)
+  dev_cfg = File.exist?(dev_cfg_path) ? (YAML.safe_load(File.read(dev_cfg_path)) || {}) : {}
+  dev_cfg['log_dir'] || '/tmp'
+end
+
+FileUtils.mkdir_p(log_dir)
+$stdout.sync = true
+$logger = Logger.new(File.join(log_dir, "post_archive-transcribe-openai_whisper-#{meeting_id}.log"))
+$logger.level = Logger::INFO
 
 TRANSCRIPTION_YML = File.join(__dir__, 'transcription.yml').freeze
 
@@ -449,6 +496,6 @@ info "Written #{segments.size} segment(s) to #{File.basename(output_json)}"
 # rate limit, 5xx), exit non-zero so transcribe_audio.rb retries the whole file
 # instead of silently accepting a truncated or empty transcript.
 if total_chunks > 0 && api_error_chunks >= (total_chunks / 2.0).ceil
-  info "ERROR: #{api_error_chunks}/#{total_chunks} chunk(s) failed with API errors — exiting 1 to trigger retry"
+  log_error "ERROR: #{api_error_chunks}/#{total_chunks} chunk(s) failed with API errors — exiting 1 to trigger retry"
   exit 1
 end

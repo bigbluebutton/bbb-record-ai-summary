@@ -72,6 +72,19 @@ def info(msg)
   end
 end
 
+# Non-fatal failures. Previously these went through info(), so an Albert outage
+# was invisible to any severity-based alerting and read like normal progress.
+# stdout matters as well as the logger: the parent transcribe_audio.rb appends
+# this script's stdout into the per-meeting transcription log.
+def log_error(msg)
+  if $logger
+    $logger.error(msg)
+    $stdout.puts "[ERROR] #{msg}"
+  else
+    $stderr.puts "ERROR: #{msg}"
+  end
+end
+
 def text_field(boundary, name, value)
   "--#{boundary}\r\n" \
   "Content-Disposition: form-data; name=\"#{name}\"\r\n\r\n" \
@@ -103,8 +116,8 @@ def call_albert(wav_path, api_key, model, language, http)
 
   response = http.request(req)
   unless response.is_a?(Net::HTTPSuccess)
-    info "Albert API error #{response.code} for #{File.basename(wav_path)}: #{response.body[0, 200]}"
-    return nil
+    log_error "PROVIDER_ERROR Albert API HTTP #{response.code} for #{File.basename(wav_path)}: #{response.body.to_s[0, 200]}"
+    return { api_error: true }
   end
 
   data      = JSON.parse(response.body)
@@ -112,9 +125,16 @@ def call_albert(wav_path, api_key, model, language, http)
   return nil if full_text.empty?
 
   { text: full_text, segments: (data['segments'] || []), language: data['language'] }
+rescue JSON::ParserError => e
+  log_error "PROVIDER_ERROR Albert returned a non-JSON body for #{File.basename(wav_path)}: #{e.message}"
+  { api_error: true }
+rescue Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNRESET, Errno::ECONNREFUSED,
+       EOFError, SocketError => e
+  log_error "PROVIDER_ERROR Albert call failed for #{File.basename(wav_path)}: #{e.class}: #{e.message}"
+  { api_error: true }
 rescue => e
-  info "Albert call failed for #{File.basename(wav_path)}: #{e.message}"
-  nil
+  log_error "MODULE_ERROR Albert call failed for #{File.basename(wav_path)}: #{e.class}: #{e.message}"
+  { api_error: true }
 end
 
 # Reads meta_recording-transcription-language
@@ -284,6 +304,7 @@ http.read_timeout = 600
 # Albert API: transcribe each chunk
 segments           = []
 detected_languages = []
+api_error_chunks   = 0
 
 # Attaches the chunk's speaker attribution to a segment hash.
 attach_speaker = lambda do |seg, chunk_info|
@@ -303,6 +324,13 @@ http.start do |conn|
     info "Chunk #{i + 1}/#{chunks.size}: #{from_ms}ms – #{to_ms}ms"
 
     res = call_albert(chunk, api_key, model, language, conn)
+
+    # An API failure is counted, not just skipped: a run where most chunks
+    # failed must not be published as a successful empty transcript.
+    if res.is_a?(Hash) && res[:api_error]
+      api_error_chunks += 1
+      next
+    end
 
     unless res
       info "  → Albert returned empty, skipping"
@@ -357,6 +385,15 @@ if effective_language.nil? && !detected_languages.empty?
   effective_language = detected_languages.tally.max_by { |_, c| c }&.first
   info "Detected language: #{effective_language} (#{detected_languages.tally.inspect})"
 end
+
+# Fail loud when Albert was largely unavailable, matching openai_whisper.rb.
+# Without this the script exits 0 with an empty transcript and the recording
+# publishes as an apparent success with no summary.
+if chunks.size > 0 && api_error_chunks >= (chunks.size / 2.0).ceil
+  log_error "#{api_error_chunks}/#{chunks.size} chunk(s) failed with Albert API errors — exiting 1 to trigger retry"
+  exit 1
+end
+info "  → #{api_error_chunks}/#{chunks.size} chunk(s) hit Albert API errors" if api_error_chunks > 0
 
 output = { 'transcription' => segments }
 output['language'] = effective_language if effective_language

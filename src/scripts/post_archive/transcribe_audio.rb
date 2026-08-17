@@ -50,6 +50,31 @@ require 'logger'
 require 'timeout'
 require 'nokogiri'
 
+# --- Metrics ----------------------------------------------------------------
+# See the matching block in ai-summary/process/ai-summary.rb. One self-contained
+# logfmt line per stage, tagged with a run_id, because these per-meeting logs
+# are appended to on every reprocess.
+
+def ai_summary_run_id
+  $ai_summary_run_id ||= "#{(Time.now.utc.to_f * 1000).to_i}-#{Process.pid}"
+end
+
+def ai_summary_monotonic_ms
+  (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).round
+end
+
+def ai_summary_logfmt(fields)
+  fields.reject { |_k, v| v.nil? || v.to_s.empty? }.map do |key, value|
+    text = value.to_s
+    text.match?(/\A[\w.:+-]+\z/) ? "#{key}=#{text}" : "#{key}=#{text.inspect}"
+  end.join(' ')
+end
+
+def emit_ai_summary_metrics(logger, fields)
+  logger.info("AI_SUMMARY_METRICS v=1 #{ai_summary_logfmt(fields)}")
+end
+# ----------------------------------------------------------------------------
+
 # Spawns a child process and waits for it to finish.
 # If timeout_seconds is given and the process exceeds it, sends SIGTERM and
 # re-raises Timeout::Error so the caller can log context and return false.
@@ -265,12 +290,16 @@ def transcribe_audio_files(backend, audio_files, transcription_dir, events_xml, 
       temp_json = File.join(transcription_dir, ".tmp_#{provider_name}_#{basename}.json")
 
       begin
+        track_started_ms = ai_summary_monotonic_ms
         success = semaphore.synchronize do
           attempt_transcription(backend, audio_file, temp_json, events_xml, retry_config: retry_config)
         end
-        next({ file: basename, segments: [], ok: false }) unless success
+        # Includes any wait for a free slot: a queued track still costs the
+        # pipeline that time.
+        track_ms = ai_summary_monotonic_ms - track_started_ms
+        next({ file: basename, segments: [], ok: false, ms: track_ms }) unless success
 
-        parse_track_result(temp_json, basename)
+        parse_track_result(temp_json, basename).merge(ms: track_ms)
       ensure
         File.delete(temp_json) if File.exist?(temp_json)
       end
@@ -428,6 +457,13 @@ logger = Logger.new(log_path)
 logger.level = Logger::INFO
 BigBlueButton.logger = logger
 
+# Marks a run boundary in a log that is appended to on every reprocess. Emitted
+# before the early exits below so that even a run that transcribes nothing is
+# delimited, matching the process and publish stages.
+BigBlueButton.logger.info("AI_SUMMARY_RUN_START v=1 " + ai_summary_logfmt(
+  stage: 'transcription', meeting_id: meeting_id, run_id: ai_summary_run_id
+))
+
 BigBlueButton.logger.info("Meeting ID : #{meeting_id}")
 
 # Paths + audio discovery
@@ -506,11 +542,13 @@ audio_semaphore    = Semaphore.new(max_parallel_audio_files)
 provider_threads = active_backends.each_with_index.map do |entry, idx|
   canonical = idx.zero? ? OUTPUT_JSON : nil
   Thread.new do
-    provider_semaphore.synchronize do
+    provider_started_ms = ai_summary_monotonic_ms
+    summary = provider_semaphore.synchronize do
       run_provider_transcription(entry, audio_files, transcription_dir, events_xml, meeting_id, canonical,
                                  audio_semaphore: audio_semaphore,
                                  retry_config:    retry_config)
     end
+    summary.merge(wall_ms: ai_summary_monotonic_ms - provider_started_ms)
   end
 end
 
@@ -534,13 +572,57 @@ BigBlueButton.logger.info("  Elapsed time  : #{(Time.now - start_time).round(1)}
 BigBlueButton.logger.info("  (Processes for providers: #{max_parallel_providers})")
 BigBlueButton.logger.info("  (Processes for audio files: #{max_parallel_audio_files})")
 
+canonical_summary = provider_summaries.first
+transcription_failed = canonical_summary.nil? || canonical_summary[:ok_count].zero? || !File.exist?(OUTPUT_JSON)
+
+# Timings for this stage. The publish stage reads this from the raw dir (which
+# survives publish) to build the whole-pipeline rollup. Providers run
+# concurrently, so wall_ms is not the sum of the per-provider values.
+stage_wall_ms = ((Time.now - start_time) * 1000).round
+timings = {
+  'schema'             => 1,
+  'stage'              => 'transcription',
+  'run_id'             => ai_summary_run_id,
+  'meeting_id'         => meeting_id,
+  'started_at'         => start_time.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
+  'wall_ms'            => stage_wall_ms,
+  'canonical_provider' => canonical_summary && canonical_summary[:name],
+  # 'degraded' is the partial case: some tracks transcribed, some did not. The
+  # canonical file is still written and the stage still exits 0, so this is the
+  # only signal that part of the meeting is missing from the transcript.
+  'outcome'            => if transcription_failed then 'failed'
+                          elsif provider_summaries.any? { |ps| ps[:failed_count].to_i > 0 } then 'degraded'
+                          else 'ok'
+                          end,
+  'providers'          => provider_summaries.map do |ps|
+    {
+      'name'         => ps[:name],
+      'wall_ms'      => ps[:wall_ms],
+      'ok_count'     => ps[:ok_count],
+      'failed_count' => ps[:failed_count],
+      'tracks'       => (ps[:track_results] || []).map { |r| { 'file' => r[:file], 'ms' => r[:ms], 'ok' => r[:ok] } }
+    }
+  end
+}
+File.write(File.join(transcription_dir, 'ai-summary-timings.json'), JSON.pretty_generate(timings))
+
+emit_ai_summary_metrics(BigBlueButton.logger,
+                        stage: 'transcription', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                        outcome: timings['outcome'], wall_ms: stage_wall_ms,
+                        providers: provider_summaries.size,
+                        asr_provider: timings['canonical_provider'],
+                        tracks: audio_files.size,
+                        tracks_ok: canonical_summary && canonical_summary[:ok_count],
+                        tracks_failed: canonical_summary && canonical_summary[:failed_count],
+                        segments: canonical_summary && canonical_summary[:total_segments],
+                        track_max_ms: (provider_summaries.flat_map { |ps| (ps[:track_results] || []).map { |r| r[:ms] } }.compact.max))
+
 # Fail loud when the canonical provider produced no usable transcript. The
 # canonical file is the first provider's output; if that provider failed every
 # track, run_provider_transcription left transcription.json absent on purpose.
 # Exit non-zero (and without a canonical file) so the recording is retried
 # rather than published with an empty transcript.
-canonical_summary = provider_summaries.first
-if canonical_summary.nil? || canonical_summary[:ok_count].zero? || !File.exist?(OUTPUT_JSON)
+if transcription_failed
   BigBlueButton.logger.error(
     "Transcription failed: canonical provider produced no successful tracks. " \
     "Leaving #{OUTPUT_JSON} absent so the pipeline can retry."
