@@ -36,7 +36,7 @@ ruby src/scripts/transcription/openai_whisper.rb <audio.webm> <out.json> <events
 
 There is no test suite or linter. The dev harness (`dev/run_pipeline.sh` + `dev/README.md`) is the way to verify changes end-to-end: it unpacks a raw-recording tarball into `recording/raw/`, runs all three stages, and (on a BBB server with HTTPS) publishes a web preview. On a BBB server it runs the source scripts in dev mode via `bundle exec`; on a non-BBB machine `--setup-only` creates `/usr/local/bigbluebutton/core/` with a shim library (`dev/lib/recordandplayback.rb`) and symlinks the scripts into it.
 
-GitHub Actions builds the .deb on pushes/PRs to the `ai-summary-new-format` branch and attaches it to releases; `publish-tag.yml` is a manual workflow that bumps the version and cuts a tag.
+GitHub Actions builds the .deb on pushes/PRs to `main` and attaches it to releases; `publish-tag.yml` is a manual workflow that bumps the version and cuts a tag.
 
 ## BBB Recording Pipeline Integration
 

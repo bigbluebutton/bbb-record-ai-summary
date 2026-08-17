@@ -2,9 +2,9 @@
 name: "Build .deb package"
 on:
   push:
-    branches: ["ai-summary-new-format"]
+    branches: ["main"]
   pull_request:
-    branches: ["ai-summary-new-format"]
+    branches: ["main"]
   release:
     types: [created]
 
