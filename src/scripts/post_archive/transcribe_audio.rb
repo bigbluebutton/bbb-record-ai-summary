@@ -457,6 +457,13 @@ logger = Logger.new(log_path)
 logger.level = Logger::INFO
 BigBlueButton.logger = logger
 
+# Marks a run boundary in a log that is appended to on every reprocess. Emitted
+# before the early exits below so that even a run that transcribes nothing is
+# delimited, matching the process and publish stages.
+BigBlueButton.logger.info("AI_SUMMARY_RUN_START v=1 " + ai_summary_logfmt(
+  stage: 'transcription', meeting_id: meeting_id, run_id: ai_summary_run_id
+))
+
 BigBlueButton.logger.info("Meeting ID : #{meeting_id}")
 
 # Paths + audio discovery
@@ -580,7 +587,13 @@ timings = {
   'started_at'         => start_time.utc.strftime('%Y-%m-%dT%H:%M:%SZ'),
   'wall_ms'            => stage_wall_ms,
   'canonical_provider' => canonical_summary && canonical_summary[:name],
-  'outcome'            => transcription_failed ? 'failed' : 'ok',
+  # 'degraded' is the partial case: some tracks transcribed, some did not. The
+  # canonical file is still written and the stage still exits 0, so this is the
+  # only signal that part of the meeting is missing from the transcript.
+  'outcome'            => if transcription_failed then 'failed'
+                          elsif provider_summaries.any? { |ps| ps[:failed_count].to_i > 0 } then 'degraded'
+                          else 'ok'
+                          end,
   'providers'          => provider_summaries.map do |ps|
     {
       'name'         => ps[:name],

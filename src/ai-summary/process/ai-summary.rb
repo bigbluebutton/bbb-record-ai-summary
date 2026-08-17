@@ -1754,7 +1754,10 @@ unless FileTest.directory?(target_dir)
     llm_calls = LLMClient::Base.call_log
     llm_timings = {
       'llm_calls'           => llm_calls.length,
-      'llm_provider'        => llm_calls.first && llm_calls.first[:provider],
+      # Fall back to the configured provider for runs that make no calls at all —
+      # a client that raised in its constructor, or nothing to summarise — so
+      # publish can still name the provider.
+      'llm_provider'        => (llm_calls.first && llm_calls.first[:provider]) || LLMClient::Base.configured_provider,
       'llm_model'           => llm_calls.first && llm_calls.first[:model],
       'llm_summary_ms'      => llm_calls.select { |c| c[:op] == 'summary' }.sum { |c| c[:ms] },
       'llm_action_items_ms' => llm_calls.select { |c| c[:op] == 'action_items' }.sum { |c| c[:ms] },
@@ -1762,17 +1765,33 @@ unless FileTest.directory?(target_dir)
       'llm_failed_calls'    => llm_calls.count { |c| !c[:ok] }
     }
     summary_present = File.exist?("#{target_dir}/summary.txt")
+    # 'ok' means this stage produced what it exists to produce, matching the
+    # transcription stage. A failed LLM call still publishes the recording, so
+    # it is 'degraded', not 'failed' — 'failed' is reserved for the rescue below.
+    #
+    # Failed calls alone are not enough: a missing API key or an unknown provider
+    # raises in the client constructor, before anything reaches Base#timed, so a
+    # server with no key at all records zero calls and would look clean. Hence
+    # the summary_present arm — with 'disabled' exempted, the one provider that
+    # is meant to produce nothing.
+    llm_disabled = llm_timings['llm_provider'].to_s == 'disabled'
+    process_outcome = if llm_timings['llm_failed_calls'].to_i.positive? ||
+                         (!summary_present && !llm_disabled)
+                        'degraded'
+                      else
+                        'ok'
+                      end
     process_timings = llm_timings.merge(
       'schema' => 1, 'stage' => 'process', 'run_id' => ai_summary_run_id,
       'meeting_id' => meeting_id, 'script_ms' => process_ms,
       'summary_present' => summary_present,
-      'outcome' => 'ok'
+      'outcome' => process_outcome
     )
     File.write("#{target_dir}/ai-summary-timings.json", JSON.pretty_generate(process_timings))
 
     emit_ai_summary_metrics(BigBlueButton.logger,
                             stage: 'process', meeting_id: meeting_id, run_id: ai_summary_run_id,
-                            outcome: 'ok', script_ms: process_ms,
+                            outcome: process_outcome, script_ms: process_ms,
                             llm_provider: llm_timings['llm_provider'], llm_model: llm_timings['llm_model'],
                             llm_calls: llm_timings['llm_calls'],
                             llm_summary_ms: llm_timings['llm_summary_ms'],
@@ -1785,6 +1804,16 @@ unless FileTest.directory?(target_dir)
     # Write status file
     File.write(done_file, "Processed #{meeting_id}")
 
+  rescue SystemExit => e
+    # A deliberate exit — the "nothing to publish" bail-out above is the only one
+    # in this block — is not a crash, and `rescue Exception` below would report it
+    # as error_class=SystemExit with a backtrace. Still emit a line: a run with no
+    # metrics line at all is indistinguishable from the process being killed.
+    emit_ai_summary_metrics(BigBlueButton.logger,
+                            stage: 'process', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                            outcome: e.success? ? 'ok' : 'failed', reason: 'no_content',
+                            script_ms: ai_summary_monotonic_ms - process_started_ms)
+    raise
   rescue Exception => e
     BigBlueButton.logger.error(e.message)
     e.backtrace.each do |traceline|

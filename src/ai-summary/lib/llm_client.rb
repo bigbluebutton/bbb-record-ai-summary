@@ -35,6 +35,14 @@ module LLMClient
       @call_log = []
     end
 
+    # The provider `create` last resolved from the config. call_log already
+    # carries the provider on every call, including DisabledClient's no-ops, but
+    # a client that raises in its constructor (missing API key, unknown provider)
+    # never reaches a call — this keeps the provider knowable in that case too.
+    class << self
+      attr_accessor :configured_provider
+    end
+
     def self.monotonic_ms
       (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).round
     end
@@ -109,6 +117,7 @@ module LLMClient
 
       config = load_llm_config(llm_config_path, logger)
       provider = config['provider']
+      Base.configured_provider = provider
       logger.info("LLM provider: #{provider}")
 
       # llm.yml 'language' overrides the transcription-detected language

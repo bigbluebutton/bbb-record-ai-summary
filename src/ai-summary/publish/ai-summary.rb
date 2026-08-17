@@ -243,6 +243,11 @@ if FileTest.directory?(final_publish_dir)
   exit 0
 end
 
+# The rollup is emitted before the cleanup that follows it, so a failure there
+# would otherwise produce a second, contradicting stage=pipeline line for the
+# same run_id.
+pipeline_emitted = false
+
 begin
   BigBlueButton.logger.info("AI_SUMMARY_RUN_START v=1 " + ai_summary_logfmt(
     stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id
@@ -274,7 +279,9 @@ begin
   output_pdf = "#{target_dir}/ai-summary.pdf"
 
   pdf_started_ms = ai_summary_monotonic_ms
-  convert_markdown_to_pdf(source_md, output_pdf, BigBlueButton.logger)
+  # Returns false rather than raising when pandoc fails or the markdown is
+  # missing, so the recording still publishes — but the run is not clean.
+  pdf_ok = convert_markdown_to_pdf(source_md, output_pdf, BigBlueButton.logger)
   pdf_ms = ai_summary_monotonic_ms - pdf_started_ms
 
   copy_process_file_to_publish_dir("ai-summary.md", "ai-summary.md", process_dir, target_dir, BigBlueButton.logger)
@@ -323,8 +330,21 @@ begin
   summary_present = process_timings.nil? ? nil : process_timings['summary_present']
   status = if summary_present.nil? then nil
            elsif summary_present then 'ok'
+           # An operator who set provider: disabled gets no summary by design;
+           # reporting that as no-summary would flag every recording forever.
+           elsif process_timings['llm_provider'].to_s == 'disabled' then 'disabled'
            else 'no-summary'
            end
+
+  # One outcome for the whole pipeline: the worst any stage reported. Both
+  # upstream stages record theirs in the timings files already read above.
+  # An upstream 'failed' caps at 'degraded' here — reaching this point means the
+  # recording published despite it. Pipeline 'failed' is reserved for the rescue
+  # below, where nothing published at all.
+  publish_outcome = pdf_ok ? 'ok' : 'degraded'
+  stage_outcomes = [transcription_timings&.dig('outcome'), process_timings&.dig('outcome')]
+                   .compact.map { |o| o == 'failed' ? 'degraded' : o } << publish_outcome
+  pipeline_outcome = %w[failed degraded ok].find { |v| stage_outcomes.include?(v) } || 'ok'
 
   add_ai_summary_meta(metadata_path, {
     'bbb-ai-summary-status'           => status,
@@ -337,14 +357,25 @@ begin
     'bbb-ai-summary-asr-provider'     => transcription_timings&.dig('canonical_provider')
   }, BigBlueButton.logger)
 
+  # Copy to final publish location if different
+  unless target_dir == final_publish_dir
+    FileUtils.cp_r(target_dir, publish_dir)
+    BigBlueButton.logger.info("Copied files to #{publish_dir}")
+  else
+    BigBlueButton.logger.info("Files already in publish location: #{target_dir}")
+  end
+
+  # Emitted only once the files are actually in place: reporting the rollup
+  # before the copy would call a run that then failed to publish 'ok'. Only the
+  # cleanup below happens after this point.
   emit_ai_summary_metrics(BigBlueButton.logger,
                           stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id,
-                          outcome: 'ok', script_ms: publish_ms, pdf_ms: pdf_ms,
+                          outcome: publish_outcome, script_ms: publish_ms, pdf_ms: pdf_ms,
                           process_ms: process_ms, process_ms_source: process_ms_source)
 
   emit_ai_summary_metrics(BigBlueButton.logger,
                           stage: 'pipeline', meeting_id: meeting_id, run_id: ai_summary_run_id,
-                          outcome: 'ok', status: status,
+                          outcome: pipeline_outcome, status: status,
                           asr_provider: transcription_timings&.dig('canonical_provider'),
                           llm_provider: process_timings&.dig('llm_provider'),
                           llm_model: process_timings&.dig('llm_model'),
@@ -355,14 +386,7 @@ begin
                           llm_action_items_ms: process_timings&.dig('llm_action_items_ms'),
                           publish_ms: publish_ms, pdf_ms: pdf_ms, total_ms: total_ms,
                           complete: [transcription_ms, process_ms, publish_ms].none?(&:nil?))
-
-  # Copy to final publish location if different
-  unless target_dir == final_publish_dir
-    FileUtils.cp_r(target_dir, publish_dir)
-    BigBlueButton.logger.info("Copied files to #{publish_dir}")
-  else
-    BigBlueButton.logger.info("Files already in publish location: #{target_dir}")
-  end
+  pipeline_emitted = true
 
   BigBlueButton.logger.info("Finished publishing script ai-summary.rb successfully.")
 
@@ -381,10 +405,23 @@ rescue Exception => e
     BigBlueButton.logger.error(traceline)
   end
 
+  # `defined?` is true for a lexically-earlier assignment even when it never ran,
+  # so it would leave nil here and raise inside this handler.
+  failed_script_ms = publish_started_ms && ai_summary_monotonic_ms - publish_started_ms
   emit_ai_summary_metrics(BigBlueButton.logger,
                           stage: 'publish', meeting_id: meeting_id, run_id: ai_summary_run_id,
                           outcome: 'failed', error_class: e.class.name,
-                          script_ms: (defined?(publish_started_ms) ? ai_summary_monotonic_ms - publish_started_ms : nil))
+                          script_ms: failed_script_ms)
+
+  # Emit the rollup here too, unless the success path already did. Without it a
+  # failed pipeline is a missing stage=pipeline line rather than a failed one, so
+  # anything counting those lines cannot see the failure at all.
+  unless pipeline_emitted
+    emit_ai_summary_metrics(BigBlueButton.logger,
+                            stage: 'pipeline', meeting_id: meeting_id, run_id: ai_summary_run_id,
+                            outcome: 'failed', error_class: e.class.name,
+                            publish_ms: failed_script_ms, complete: false)
+  end
 
   # Write failure status file
   File.write("#{recording_dir}/status/published/#{meeting_id}-ai-summary.fail", "Failed Publishing #{meeting_id}")

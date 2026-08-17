@@ -146,12 +146,44 @@ AI_SUMMARY_METRICS v=1 stage=pipeline meeting_id=… run_id=1786670563-31415 out
 
 | Field | Meaning |
 |---|---|
+| `outcome` | Did the stage produce what it exists to produce — see the table below. On the `stage=pipeline` line it is the worst of the three stages |
+| `status` | What the recording ended up with: `ok`, `no-summary` (the LLM failed), or `disabled` (`llm.provider: disabled`, so no summary was ever meant to exist). Absent when the process stage's timings could not be read |
 | `transcription_ms` | Whole post_archive stage, all providers (they run concurrently, so this is wall time, not the sum) |
 | `process_ms` | The process stage — extraction, LLM calls, rendering |
 | `llm_summary_ms`, `llm_action_items_ms` | The individual LLM calls, retries included. Usually ~99 % of `process_ms` |
 | `publish_ms`, `pdf_ms` | Publish stage, and the pandoc PDF conversion within it |
 | `total_ms` | Sum of the three stage durations. **Excludes** queue waits between workers, so it is processing cost, not user-perceived latency |
 | `complete` | `false` when a stage duration was unavailable (e.g. a cached transcript) — treat the total as partial |
+
+### Sweeping for bad runs
+
+`outcome` answers one question per stage: did it produce what it exists to produce?
+
+| `outcome` | Meaning | Exit code |
+|---|---|---|
+| `ok` | Produced everything | 0 |
+| `degraded` | Ran to completion and the recording published, but something inside was lost — an LLM call failed, the PDF did not convert, or some audio tracks did not transcribe. The neighbouring fields (`llm_failed_calls`, `pdf_ms`, `tracks_failed`) say which | 0 |
+| `failed` | Produced nothing; the script raised and the pipeline should retry | 1 |
+
+So one grep finds every run worth looking at:
+
+```bash
+grep -h AI_SUMMARY_METRICS /var/log/bigbluebutton/ai-summary/*.log \
+  /var/log/bigbluebutton/post_archive-transcribe-*.log | grep -v 'outcome=ok'
+```
+
+Note that `outcome` is per **stage**. The `LLM call op=… outcome=` lines in the process
+log are a different, per-call signal — one failed call among several is what makes the
+stage `degraded`.
+
+Two caveats when reading the `stage=pipeline` rollup:
+
+- It reports the worst stage it has data for, so a stage that emitted nothing (see the
+  skip conditions below) cannot drag it down.
+- Transcription is skipped outright when `transcription.json` already exists, and that
+  skip does not rewrite the stage's timings file. Compare the rollup's
+  `transcription_run_id` against the transcription log's own `AI_SUMMARY_RUN_START`
+  before trusting the transcription half of a reprocessed recording.
 
 Mean processing time across all recordings on the server:
 
@@ -177,9 +209,11 @@ the API instead of the logs — `getRecordings` returns per-format
 <bbb-ai-summary-asr-provider>openai_whisper</bbb-ai-summary-asr-provider>
 ```
 
-`bbb-ai-summary-status` is `ok` when a summary was produced and `no-summary`
-when the LLM failed but the recording still published — the case that used to be
-invisible without reading the logs.
+`bbb-ai-summary-status` is `ok` when a summary was produced, `no-summary` when the
+LLM failed but the recording still published — the case that used to be invisible
+without reading the logs — and `disabled` when `llm.provider` is `disabled`, so a
+server that deliberately runs without an LLM does not look like a server whose LLM
+is broken.
 
 ### Watch logs
 
