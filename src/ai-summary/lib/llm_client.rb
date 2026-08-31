@@ -157,9 +157,11 @@ module LLMClient
 
     # Run a completion with an explicit system prompt. Used for structured
     # extraction (e.g. action items) that needs its own instructions rather than
-    # the meeting-summary system prompt.
+    # the meeting-summary system prompt. The caller's prompt still gets the
+    # language and operator additions — an extraction prompt written in English
+    # otherwise produces English output regardless of the meeting's language.
     def complete(user, system:)
-      timed('action_items') { chat_completion(system: system, user: user) }
+      timed('action_items') { chat_completion(system: decorate_prompt(system), user: user) }
     end
 
     def provider_name
@@ -241,7 +243,14 @@ module LLMClient
     end
 
     def system_prompt
-      base = @config['system_prompt'] || "Summarize the following meeting content."
+      decorate_prompt(@config['system_prompt'] || "Summarize the following meeting content.")
+    end
+
+    # Appends the output-language instruction and any operator prompt addition
+    # to +base+. Applies to every call, not just the meeting summary, so that
+    # structured extraction with its own system prompt answers in the same
+    # language as the summary.
+    def decorate_prompt(base)
       result = base.rstrip
       result = "#{result}\n\nWrite your entire response in the language with ISO 639-1 code '#{@language}'." if @language && !@language.empty?
       result = "#{result}\n\n#{@prompt_addition.strip}" if @prompt_addition && !@prompt_addition.strip.empty?
