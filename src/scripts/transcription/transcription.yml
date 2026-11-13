@@ -82,6 +82,22 @@ albert:
 openai:
   api_key: "your-openai-api-key-here"
 
+  # Response format requested from the OpenAI API (read by openai_whisper.rb).
+  #   verbose_json (default): uses `model`; timestamped segments per sentence.
+  #   json: uses `text_model`; one segment per speech chunk, timed with the
+  #         chunk's own offsets from events.xml. Recommended for LiveKit
+  #         recordings (one track per microphone, already cut into short
+  #         talking cues): gpt-transcribe stays silent on open microphones
+  #         where whisper-1 tends to invent text. No prompt is sent in this mode.
+  # response_format: verbose_json
+
+  # Model used with response_format: verbose_json.
+  # model: "whisper-1"
+
+  # Model used with response_format: json (it must accept response_format=json,
+  # e.g. gpt-transcribe).
+  # text_model: "gpt-transcribe"
+
   # Domain context string prepended to the Whisper prompt.
   # Only read by openai_whisper_contextual.rb — has no effect with any other backend.
   # Example: "This is a software engineering meeting. Terms: Kubernetes, CI/CD."
