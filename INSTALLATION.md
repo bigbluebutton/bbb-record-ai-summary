@@ -80,6 +80,15 @@ openai:
   api_key: "..."
 ```
 
+  On LiveKit recordings, `gpt-transcribe` gives cleaner transcripts than the
+  default `whisper-1` (no invented text on open microphones). Enable it with:
+```yaml
+openai:
+  api_key: "..."
+  response_format: json         # uses text_model, default gpt-transcribe
+```
+  See [DEVELOPMENT.md](DEVELOPMENT.md#openai-response-format) for details.
+
   There is no Claude transcriber: Anthropic has no speech-to-text API. Use OpenAI
   or Albert for transcription — `llm.provider: claude` still works for the summary.
 

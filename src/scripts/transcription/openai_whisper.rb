@@ -24,6 +24,24 @@
 #   WHISPER_KNOWN_SPEAKER_NAMES     — comma-separated list of known speaker names for diarization
 #                                     (e.g. "Alice,Bob,Carol"); maps to known_speaker_names[] in the API
 #
+# Response format (openai.response_format in transcription.yml, or the
+# OPENAI_RESPONSE_FORMAT environment variable; OPENAI_MODEL overrides the model
+# of the selected format):
+#   verbose_json (default): uses openai.model (default whisper-1). Returns
+#                  timestamped segments and accepts a prompt. Behavior unchanged.
+#   json:          uses openai.text_model (default gpt-transcribe). These models
+#                  return only the text of each request, so every speech chunk
+#                  becomes one segment carrying the chunk's own offsets from
+#                  events.xml. This fits LiveKit recordings, where every
+#                  microphone has its own track and is already cut into short
+#                  talking cues, so per-sentence timestamps are not needed.
+#                  On those per-microphone tracks whisper-1 often invents text
+#                  on open microphones with background noise (subtitle credits,
+#                  "Thank you", short filler words); gpt-transcribe returns empty
+#                  text instead. No prompt and no temperature are sent in this
+#                  mode: with these models a prompt (names, context or the
+#                  previous chunk) makes them invent dialogue on silent chunks.
+#
 # OpenAI Whisper API file size limit: 25 MB per request.
 # Audio is split into per-speech chunks via events.xml before sending.
 #
@@ -55,6 +73,8 @@ MAX_BYTES     = 25 * 1024 * 1024  # OpenAI hard limit per request
 def diarization_model?(model)
   model.to_s.include?('diarize')
 end
+
+DEFAULT_TEXT_MODEL = 'gpt-transcribe'.freeze
 
 # verbose_json returns the detected language as a full lowercase name
 # ("english"). Map common names to ISO 639-1 so downstream summarization gets a
@@ -130,6 +150,7 @@ end
 #     sum_no_speech_prob: Float    # sum of no_speech_prob across all raw segments
 #   }
 def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
+                chunk_duration_ms: nil, response_format: 'verbose_json',
                 model: DEFAULT_MODEL,
                 temperature: DEFAULT_TEMPERATURE, prompt: nil,
                 known_speaker_names: nil,
@@ -148,10 +169,14 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
   body_parts = []
   body_parts << text_field(boundary, 'model',           model)
   body_parts << text_field(boundary, 'language',        language) if language
-  body_parts << text_field(boundary, 'response_format', 'verbose_json')
-  body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
-  body_parts << text_field(boundary, 'temperature',     temperature.to_s)
-  body_parts << text_field(boundary, 'prompt',          prompt) if prompt
+  if response_format == 'json'
+    body_parts << text_field(boundary, 'response_format', 'json')
+  else
+    body_parts << text_field(boundary, 'response_format', 'verbose_json')
+    body_parts << text_field(boundary, 'timestamp_granularities[]', 'segment')
+    body_parts << text_field(boundary, 'temperature',     temperature.to_s)
+    body_parts << text_field(boundary, 'prompt',          prompt) if prompt
+  end
   if diarization_model?(model)
     (known_speaker_names || []).each do |name|
       body_parts << text_field(boundary, 'known_speaker_names[]', name)
@@ -176,6 +201,19 @@ def call_openai(wav_path, api_key, language, http, chunk_offset_ms: 0,
   end
 
   data        = JSON.parse(response.body)
+
+  if response_format == 'json'
+    text = data['text'].to_s.strip
+    segments = if text.empty?
+                 []
+               else
+                 [{ 'offsets' => { 'from' => chunk_offset_ms, 'to' => chunk_offset_ms + chunk_duration_ms.to_i },
+                    'text' => text }]
+               end
+    return { segments: segments, raw_count: segments.size, sum_logprob: 0.0, sum_no_speech_prob: 0.0,
+             api_error: false, detected_language: language }
+  end
+
   raw_segs    = data['segments'] || []
   raw_count   = raw_segs.size
   sum_logprob         = raw_segs.sum { |s| s['avg_logprob'].to_f }
@@ -311,9 +349,19 @@ known_speaker_names = if known_speaker_names_raw.empty?
                         known_speaker_names_raw.split(',').map(&:strip).reject(&:empty?).then { |a| a.empty? ? nil : a }
                       end
 
+response_format = ENV['OPENAI_RESPONSE_FORMAT'].to_s.strip
+response_format = openai_cfg['response_format'].to_s.strip if response_format.empty?
+response_format = 'verbose_json' unless response_format == 'json'
+
 model = ENV['OPENAI_MODEL'].to_s.strip
-model = openai_cfg['model'].to_s.strip if model.empty?
-model = DEFAULT_MODEL if model.empty?
+if response_format == 'json'
+  model = openai_cfg['text_model'].to_s.strip if model.empty?
+  model = DEFAULT_TEXT_MODEL if model.empty?
+else
+  model = openai_cfg['model'].to_s.strip if model.empty?
+  model = DEFAULT_MODEL if model.empty?
+end
+info "Model: #{model} (response_format: #{response_format})"
 
 # known_speaker_names only works with diarizing models; drop it otherwise so we
 # never send a parameter the model does not support.
@@ -412,6 +460,8 @@ http.start do |conn|
       chunk_info[:path], api_key, language, conn,
       model:                   model,
       chunk_offset_ms:         chunk_info[:from_ms],
+      chunk_duration_ms:       chunk_info[:to_ms] - chunk_info[:from_ms],
+      response_format:         response_format,
       temperature:             temperature,
       prompt:                  effective_prompt,
       known_speaker_names:     known_speaker_names,
@@ -456,6 +506,7 @@ TranscriptionUtils.cleanup_chunks(result[:chunks_dir], result[:temp_wav])
 
 config_block = {
   'model'                   => model,
+  'response_format'         => response_format,
   'language'                => language,
   'temperature'             => temperature,
   'quality_score_threshold' => quality_threshold

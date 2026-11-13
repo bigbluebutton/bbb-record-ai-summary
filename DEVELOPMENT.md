@@ -116,6 +116,40 @@ If `transcription.json` already exists, the transcription step exits early.
 
 Both providers use `transcription_utils.rb` for chunking audio based on `events.xml` talking cues.
 
+### OpenAI response format
+
+`openai_whisper.rb` supports two modes, selected by `openai.response_format` in
+`/etc/bigbluebutton/post-archive-transcription.yml` (or `OPENAI_RESPONSE_FORMAT`):
+
+| `response_format` | Model key (default) | Output |
+|---|---|---|
+| `verbose_json` (default) | `model` (`whisper-1`) | Timestamped segments per sentence; prompt and temperature are sent |
+| `json` | `text_model` (`gpt-transcribe`) | One segment per speech chunk, timed with the chunk's offsets from `events.xml`; no prompt, no temperature |
+
+```yaml
+openai:
+  api_key: "..."
+  response_format: json
+  text_model: gpt-transcribe   # optional, this is the default
+```
+
+Why `json` works well with LiveKit: each microphone is recorded on its own
+track and `transcription_utils.rb` already cuts it into short talking cues, so
+the chunk offsets are precise enough and per-sentence timestamps from the API
+are not needed. `gpt-transcribe` does not support `verbose_json`, which is why
+it needs this mode instead of a plain model swap.
+
+The gain is on noise: with one track per microphone, a microphone left open
+with background noise is marked as talking and sent to the API. `whisper-1`
+answers those chunks with invented text (subtitle credits such as
+"Subtitles by the Amara.org community", short filler words, repetition loops
+fed by the rolling prompt), while `gpt-transcribe` returns empty text. No prompt
+is sent in `json` mode on purpose: with these models a prompt (participant
+names, meeting context or the previous chunk) makes them invent dialogue on
+silent chunks.
+
+On FreeSWITCH recordings (one mixed track) keep the default `verbose_json`.
+
 ### API key resolution
 
 Provider scripts resolve keys in this order:
